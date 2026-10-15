@@ -1,0 +1,31 @@
+from app.models.models import (
+    Student,
+    Faculty,
+    Company,
+    Attendance,
+    AttendanceException,
+    InternshipReport,
+    ReportVersionHistory,
+    Document,
+    WeeklyProgress,
+    Holiday,
+    Notification,
+    AuditLog,
+    UserSession,
+)
+
+__all__ = [
+    "Student",
+    "Faculty",
+    "Company",
+    "Attendance",
+    "AttendanceException",
+    "InternshipReport",
+    "ReportVersionHistory",
+    "Document",
+    "WeeklyProgress",
+    "Holiday",
+    "Notification",
+    "AuditLog",
+    "UserSession",
+]

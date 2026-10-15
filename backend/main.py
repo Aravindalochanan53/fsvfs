@@ -1,0 +1,71 @@
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from app.api.api import api_router
+from app.core.config import settings
+from app.db.seed import seed_database
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    seed_database()
+    yield
+
+
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    version=settings.VERSION,
+    description=(
+        "Internship Attendance Intelligence Platform for Kongu Engineering College. "
+        "GPS-geofenced check-in/out, faculty approval workflows, and institution-wide analytics."
+    ),
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,  # explicit list, never "*"
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+app.include_router(api_router, prefix=settings.API_V1_STR)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    # Consistent error envelope; never leak stack traces to clients.
+    return JSONResponse(
+        status_code=500,
+        content={"success": False, "detail": "Internal server error", "code": "internal_error"},
+    )
+
+
+@app.get("/", tags=["Health"])
+def root():
+    return {
+        "status": "online",
+        "message": f"{settings.PROJECT_NAME} v{settings.VERSION}",
+        "docs_url": "/docs",
+    }
+
+
+@app.get("/api/health", tags=["Health"])
+def health_check():
+    return {
+        "status": "healthy",
+        "service": settings.PROJECT_NAME,
+        "version": settings.VERSION,
+        "db_engine": settings.DB_ENGINE,
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
