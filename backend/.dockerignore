@@ -1,0 +1,10 @@
+.env
+.secret_key
+.venv/
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+tests/
+test_strict_suite.py
+uploads/
+kongu_internship.db

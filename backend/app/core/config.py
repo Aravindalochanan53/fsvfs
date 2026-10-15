@@ -22,7 +22,7 @@ class Settings:
 
     MSSQL_SERVER: str = os.getenv("MSSQL_SERVER", r"localhost\MSSQL")
     MSSQL_DATABASE: str = os.getenv("MSSQL_DATABASE", "kongu_db")
-    MSSQL_DRIVER: str = os.getenv("MSSQL_DRIVER", "ODBC Driver 17 for SQL Server")
+    MSSQL_DRIVER: str = os.getenv("MSSQL_DRIVER", "ODBC Driver 18 for SQL Server")
     MSSQL_USER: str = os.getenv("MSSQL_USER", "")
     MSSQL_PASSWORD: str = os.getenv("MSSQL_PASSWORD", "")
     MSSQL_TRUSTED_CONNECTION: str = os.getenv("MSSQL_TRUSTED_CONNECTION", "yes")

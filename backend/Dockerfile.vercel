@@ -1,0 +1,31 @@
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+# pyodbc needs unixODBC plus Microsoft's SQL Server ODBC driver. The driver is
+# installed in the image so no host-level package installation is required.
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y ca-certificates curl gnupg unixodbc unixodbc-dev \
+    && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+        | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
+    && curl -fsSL https://packages.microsoft.com/config/debian/12/prod.list \
+        -o /etc/apt/sources.list.d/microsoft-prod.list \
+    && sed -i 's#^deb #deb [signed-by=/usr/share/keyrings/microsoft-prod.gpg] #' \
+        /etc/apt/sources.list.d/microsoft-prod.list \
+    && apt-get update \
+    && ACCEPT_EULA=Y apt-get install --no-install-recommends -y msodbcsql18 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN pip install -r requirements.txt
+
+COPY . ./
+
+# Vercel supplies PORT at runtime. Defaulting to 80 also permits local docker
+# execution with `docker run -p 8000:80`.
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-80}"]

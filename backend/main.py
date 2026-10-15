@@ -23,8 +23,10 @@ app = FastAPI(
         "GPS-geofenced check-in/out, faculty approval workflows, and institution-wide analytics."
     ),
     lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
+    swagger_ui_oauth2_redirect_url="/api/docs/oauth2-redirect",
 )
 
 app.add_middleware(
@@ -52,7 +54,7 @@ def root():
     return {
         "status": "online",
         "message": f"{settings.PROJECT_NAME} v{settings.VERSION}",
-        "docs_url": "/docs",
+        "docs_url": "/api/docs",
     }
 
 
