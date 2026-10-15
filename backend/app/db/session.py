@@ -11,6 +11,8 @@ engine_kwargs = {
 if "sqlite" in settings.DATABASE_URL:
     engine_kwargs["connect_args"] = {"check_same_thread": False}
 elif "mssql" in settings.DATABASE_URL:
+    engine_kwargs["connect_args"] = {"timeout": 5}
+    engine_kwargs["pool_timeout"] = 5
     # fast_executemany dramatically accelerates pyodbc bulk insert/commit operations
     engine_kwargs["fast_executemany"] = True
     engine_kwargs["pool_size"] = 10

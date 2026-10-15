@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
+import os
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError
 
 from app.api.api import api_router
 from app.core.config import settings
@@ -11,7 +13,10 @@ from app.db.seed import seed_database
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    seed_database()
+    # Database provisioning is an explicit local operation, not a cold-start task.
+    # Vercel must bind its port even when the database is unavailable.
+    if os.getenv("SEED_DATABASE_ON_STARTUP", "false").lower() == "true":
+        seed_database()
     yield
 
 
@@ -38,6 +43,18 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
+
+
+@app.exception_handler(OperationalError)
+async def database_unavailable_handler(request: Request, exc: OperationalError):
+    return JSONResponse(
+        status_code=503,
+        content={
+            "success": False,
+            "detail": "Database temporarily unavailable. Please try again later.",
+            "code": "database_unavailable",
+        },
+    )
 
 
 @app.exception_handler(Exception)
