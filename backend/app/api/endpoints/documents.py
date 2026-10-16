@@ -10,9 +10,10 @@ import io
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -20,6 +21,7 @@ from app.core.deps import client_ip, ensure_student_access, require_auth
 from app.db.session import get_db
 from app.models.models import Document, Faculty, Student
 from app.services.common import audit, notify_student
+from app.services.document_storage import save_document, discard_new_document, document_file, read_private_blob
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
@@ -71,9 +73,10 @@ async def upload_document(
     if ext not in settings.ALLOWED_UPLOAD_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"File type '{ext}' not allowed")
 
-    content = await file.read(settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024 + 1)
-    if len(content) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
-        raise HTTPException(status_code=413, detail=f"File exceeds {settings.MAX_UPLOAD_SIZE_MB} MB limit")
+    limit_mb = settings.effective_upload_limit_mb
+    content = await file.read(limit_mb * 1024 * 1024 + 1)
+    if len(content) > limit_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File exceeds {limit_mb} MB limit for this deployment")
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
 
@@ -92,12 +95,7 @@ async def upload_document(
 
     # Random UUID file name — no path traversal, no collisions, no CPU-timing.
     stored_name = f"{uuid.uuid4().hex}{ext}"
-    dest_dir = settings.UPLOAD_DIR / "documents"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / stored_name
-
-    with open(dest, "wb") as fh:
-        fh.write(content)
+    stored_name = await save_document(stored_name, content, mime)
 
     doc = Document(
         student_id=student.id, reg_no=student.roll_number,
@@ -114,7 +112,7 @@ async def upload_document(
         db.commit()
     except Exception:
         db.rollback()
-        dest.unlink(missing_ok=True)
+        await discard_new_document(stored_name)
         raise
     db.refresh(doc)
 
@@ -160,9 +158,17 @@ def download_document(document_id: int, payload: dict = Depends(require_auth), d
         raise HTTPException(status_code=404, detail="Owning student not found")
     ensure_student_access(db, payload, student)
 
-    directory = (settings.UPLOAD_DIR / "documents").resolve()
-    path = (directory / doc.stored_name).resolve()
-    if not path.is_relative_to(directory) or not path.is_file():
+    try:
+        if doc.stored_name.startswith("blob:") or settings.UPLOAD_STORAGE == "vercel_blob":
+            content = read_private_blob(doc.stored_name)
+            # Stream legacy documents too; do not buffer a >4.5 MB HTTP response.
+            chunks = (content[offset:offset + 65536] for offset in range(0, len(content), 65536))
+            return StreamingResponse(chunks, media_type=doc.mime_type, headers={
+                "Content-Disposition": "attachment; filename*=UTF-8''" + quote(doc.original_name, safe=""),
+                "Cache-Control": "no-store",
+            })
+        path = document_file(doc.stored_name)
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Stored file missing")
     return FileResponse(path, media_type=doc.mime_type, filename=doc.original_name)
 

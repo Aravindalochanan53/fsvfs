@@ -13,24 +13,18 @@ from sqlalchemy import inspect
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.session import engine
+from app.db.session import Base
+from app.models import models  # noqa: F401 — register every application table
 
 
-REQUIRED_COLUMNS = {
-    "faculty": {"faculty_id", "faculty_name", "role", "email", "is_active"},
-    "students": {"company_id", "is_active"},
-    "companies": {"latitude", "longitude", "geofence_radius_m"},
-    "attendance": {"student_id", "attendance_date", "check_in_at", "check_out_at",
-                   "in_distance_m", "in_accuracy_m", "out_distance_m", "out_accuracy_m",
-                   "verification_state", "verification_flags", "supervisor_verified",
-                   "supervisor_token", "updated_at"},
-}
+REQUIRED_COLUMNS = {table.name: set(table.columns.keys()) for table in Base.metadata.sorted_tables}
 
 
 def main() -> int:
     try:
         inspector = inspect(engine)
     except SQLAlchemyError as exc:
-        print(f"Database preflight could not connect: {exc.__class__.__name__}: {exc}")
+        print(f"Database preflight could not connect ({exc.__class__.__name__}). Check reachability and credentials.")
         return 2
     missing: list[str] = []
     for table, required in REQUIRED_COLUMNS.items():

@@ -1,6 +1,7 @@
 import os
 import secrets
 import urllib.parse
+import re
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -14,6 +15,8 @@ else:
 
 
 class Settings:
+    IS_VERCEL: bool = os.getenv("VERCEL", "") == "1"
+    IS_PRODUCTION: bool = IS_VERCEL or os.getenv("APP_ENV", "development").lower() == "production"
     PROJECT_NAME: str = "KEC Internship Attendance Intelligence Platform"
     VERSION: str = "2.0.0"
     API_V1_STR: str = "/api"
@@ -27,20 +30,24 @@ class Settings:
     MSSQL_PASSWORD: str = os.getenv("MSSQL_PASSWORD", "")
     MSSQL_TRUSTED_CONNECTION: str = os.getenv("MSSQL_TRUSTED_CONNECTION", "yes")
     MSSQL_TRUST_CERTIFICATE: str = os.getenv("MSSQL_TRUST_CERTIFICATE", "yes")
+    MSSQL_ENCRYPT: str = os.getenv("MSSQL_ENCRYPT", "yes")
 
     @classmethod
     def build_mssql_odbc_string(cls, database_name: str | None = None) -> str:
         db_name = database_name if database_name is not None else cls.MSSQL_DATABASE
         driver = cls.MSSQL_DRIVER.strip("{}")
+        # Quote ODBC values so passwords containing ';' or '}' remain valid.
+        quote = lambda value: "{" + str(value).replace("}", "}}") + "}"
         parts = [
             f"DRIVER={{{driver}}}",
-            f"SERVER={cls.MSSQL_SERVER}",
-            f"DATABASE={db_name}",
+            f"SERVER={quote(cls.MSSQL_SERVER)}",
+            f"DATABASE={quote(db_name)}",
+            f"Encrypt={cls.MSSQL_ENCRYPT}",
             f"TrustServerCertificate={cls.MSSQL_TRUST_CERTIFICATE}",
         ]
         if cls.MSSQL_USER and cls.MSSQL_PASSWORD:
-            parts.append(f"UID={cls.MSSQL_USER}")
-            parts.append(f"PWD={cls.MSSQL_PASSWORD}")
+            parts.append(f"UID={quote(cls.MSSQL_USER)}")
+            parts.append(f"PWD={quote(cls.MSSQL_PASSWORD)}")
         else:
             parts.append(f"Trusted_Connection={cls.MSSQL_TRUSTED_CONNECTION}")
         return ";".join(parts) + ";"
@@ -84,8 +91,14 @@ class Settings:
     RATE_LIMIT_ATTENDANCE_PER_MINUTE: int = int(os.getenv("RATE_LIMIT_ATTENDANCE_PER_MINUTE", "20"))
 
     # Uploads
-    UPLOAD_DIR: Path = BASE_DIR / "uploads"
+    UPLOAD_DIR: Path = Path(os.getenv("UPLOAD_DIR", str(BASE_DIR / "uploads")))
+    UPLOAD_STORAGE: str = os.getenv("UPLOAD_STORAGE", "vercel_blob" if IS_VERCEL else "local").lower()
     MAX_UPLOAD_SIZE_MB: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "20"))
+
+    @property
+    def effective_upload_limit_mb(self) -> int:
+        # Multipart overhead must also fit Vercel's 4.5 MB request limit.
+        return min(self.MAX_UPLOAD_SIZE_MB, 4) if self.IS_VERCEL else self.MAX_UPLOAD_SIZE_MB
     ALLOWED_UPLOAD_EXTENSIONS: set[str] = {".jpg", ".jpeg", ".png", ".webp", ".pdf", ".docx"}
     ALLOWED_UPLOAD_MIMES: set[str] = {
         "image/jpeg", "image/png", "image/webp",
@@ -107,7 +120,7 @@ class Settings:
     INSTITUTION_TZ: str = "Asia/Kolkata"
 
     def ensure_secret(self) -> None:
-        if os.getenv("APP_ENV", "development").lower() == "production" and len(self.SECRET_KEY) < 32:
+        if self.IS_PRODUCTION and len(self.SECRET_KEY) < 32:
             raise RuntimeError("Production requires a SECRET_KEY of at least 32 characters")
         if not self.SECRET_KEY:
             # Persist a strong generated key so tokens survive restarts in dev.
@@ -122,10 +135,42 @@ class Settings:
                 except OSError:
                     pass
 
+    def deployment_errors(self) -> list[str]:
+        """Validate names/configuration without connecting or printing secrets."""
+        errors = []
+        if self.UPLOAD_STORAGE not in ("local", "vercel_blob"):
+            errors.append("UPLOAD_STORAGE must be local or vercel_blob")
+        if not self.IS_PRODUCTION:
+            return errors
+        url = self.get_database_url()
+        if url.startswith("sqlite"):
+            errors.append("Production requires a persistent remote SQL Server database; SQLite is not durable on Vercel")
+        if not os.getenv("DATABASE_URL"):
+            host = self.MSSQL_SERVER.lower().removeprefix("tcp:").split(",")[0].split("\\")[0]
+            if host in ("localhost", "127.0.0.1", "::1", ".", "(local)") or host.startswith("127."):
+                errors.append("MSSQL_SERVER must be a cloud-reachable SQL Server host, not this laptop")
+            if not self.MSSQL_USER or not self.MSSQL_PASSWORD:
+                errors.append("MSSQL_USER and MSSQL_PASSWORD are required for remote SQL authentication")
+            if self.MSSQL_TRUSTED_CONNECTION.lower() != "no":
+                errors.append("Set MSSQL_TRUSTED_CONNECTION=no; Windows integrated authentication is unavailable in Vercel")
+            if self.MSSQL_TRUST_CERTIFICATE.lower() != "no" or self.MSSQL_ENCRYPT.lower() != "yes":
+                errors.append("Production SQL requires MSSQL_ENCRYPT=yes and MSSQL_TRUST_CERTIFICATE=no")
+        elif re.search(r"localhost|127\.0\.0\.1", urllib.parse.unquote_plus(url), re.I):
+            errors.append("DATABASE_URL must not point to localhost")
+        if self.IS_VERCEL and self.UPLOAD_STORAGE != "vercel_blob":
+            errors.append("Vercel requires UPLOAD_STORAGE=vercel_blob; local uploads disappear across instances")
+        if self.UPLOAD_STORAGE == "vercel_blob" and not (
+            os.getenv("BLOB_READ_WRITE_TOKEN") or os.getenv("VERCEL_BLOB_READ_WRITE_TOKEN")
+            or (os.getenv("BLOB_STORE_ID") and os.getenv("VERCEL_OIDC_TOKEN"))
+        ):
+            errors.append("Connect a private Vercel Blob store (BLOB_STORE_ID/OIDC or BLOB_READ_WRITE_TOKEN)")
+        if os.getenv("SEED_DATABASE_ON_STARTUP", "false").lower() == "true":
+            errors.append("SEED_DATABASE_ON_STARTUP must be false in production")
+        return errors
+
 
 settings = Settings()
 settings.ensure_secret()
 settings.DATABASE_URL = settings.get_database_url()
 
-for sub in ("reports", "photos", "documents"):
-    (settings.UPLOAD_DIR / sub).mkdir(parents=True, exist_ok=True)
+# No filesystem writes at import time; cloud instances use durable Blob storage.

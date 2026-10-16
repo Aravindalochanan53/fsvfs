@@ -187,7 +187,7 @@ export const api = {
   getConsolidateSummary: () => request("/consolidate/summary"),
 
   uploadDocument: (formData) =>
-    request("/consolidate/upload", {
+    request("/documents/upload", {
       method: "POST",
       isFormData: true,
       body: formData,

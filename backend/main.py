@@ -13,12 +13,16 @@ from app.api.api import api_router
 from app.core.config import settings
 from app.db.seed import seed_database
 from app.db.session import get_db
+from app.services.document_storage import StorageUnavailable
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    errors = settings.deployment_errors()
+    if errors:
+        raise RuntimeError("Deployment configuration: " + "; ".join(errors))
     # Database provisioning is an explicit local operation, not a cold-start task.
     # Vercel must bind its port even when the database is unavailable.
     if os.getenv("SEED_DATABASE_ON_STARTUP", "false").lower() == "true":
@@ -74,6 +78,13 @@ async def database_unavailable_handler(request: Request, exc: OperationalError):
             "code": "database_unavailable",
         },
     )
+
+
+@app.exception_handler(StorageUnavailable)
+async def storage_unavailable_handler(request: Request, exc: StorageUnavailable):
+    return JSONResponse(status_code=503, content={
+        "success": False, "detail": str(exc), "code": "storage_unavailable",
+    })
 
 
 @app.exception_handler(Exception)

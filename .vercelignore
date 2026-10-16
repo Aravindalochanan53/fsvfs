@@ -1,0 +1,16 @@
+.git
+**/.env
+**/.env.*
+**/.secret_key
+**/.venv
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/*.pyc
+**/*.db
+**/*.bacpac
+**/*.dacpac
+**/*.bak
+frontend/dist
+backend/uploads
+docs/legacy-cleanup-backup-*.zip

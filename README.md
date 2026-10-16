@@ -2,7 +2,13 @@
 
 An enterprise-grade, full-stack modernization of the Kongu Engineering College (KEC) Internship Management & Academic Attendance Portal. Built with **FastAPI** (Python 3.13 + SQLAlchemy + Microsoft SQL Server / SQLite) on the backend and **React + Vite** with modern responsive CSS, interactive Chart.js visualizations, and Lucide icons on the frontend.
 
-The legacy root-level PHP files are preserved untouched as reference.
+For Vercel, follow [the deployment guide](backend/DEPLOYMENT.md). The local MSSQL
+`kongu_db` must first be migrated to a reachable SQL Server/Azure SQL instance;
+Vercel cannot access a laptop's localhost database. Private uploads use connected
+Vercel Blob storage in cloud deployments.
+
+Legacy PHP reference files remain in the local cleanup backup. Private data and
+backups are excluded from Git and deployment bundles.
 
 ---
 

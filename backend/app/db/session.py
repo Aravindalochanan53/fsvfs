@@ -15,8 +15,10 @@ elif "mssql" in settings.DATABASE_URL:
     engine_kwargs["pool_timeout"] = 5
     # fast_executemany dramatically accelerates pyodbc bulk insert/commit operations
     engine_kwargs["fast_executemany"] = True
-    engine_kwargs["pool_size"] = 10
-    engine_kwargs["max_overflow"] = 20
+    import os
+    engine_kwargs["pool_size"] = int(os.getenv("DB_POOL_SIZE", "2" if settings.IS_PRODUCTION else "10"))
+    engine_kwargs["max_overflow"] = int(os.getenv("DB_MAX_OVERFLOW", "2" if settings.IS_PRODUCTION else "20"))
+    engine_kwargs["pool_recycle"] = 300
 
 engine = create_engine(settings.DATABASE_URL, **engine_kwargs)
 

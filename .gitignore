@@ -2,7 +2,9 @@
 .env
 .env.*
 !.env.example
+!.env.production.example
 .secret_key
+.vercel/
 
 # Runtime / build artifacts
 __pycache__/
@@ -14,3 +16,6 @@ backend/uploads/
 docs/legacy-cleanup-backup-*.zip
 *.db
 *.db-journal
+*.bacpac
+*.dacpac
+*.bak
