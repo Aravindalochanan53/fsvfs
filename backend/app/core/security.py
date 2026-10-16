@@ -24,7 +24,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     - 4-part format: pbkdf2_sha256$iterations$salt$hash"""
     try:
         if not hashed_password or "$" not in hashed_password:
-            return plain_password == hashed_password
+            return bool(hashed_password) and secrets.compare_digest(plain_password.encode(), hashed_password.encode())
         parts = hashed_password.split("$")
         if len(parts) == 4 and parts[0] == "pbkdf2_sha256":
             iterations = int(parts[1])
@@ -33,6 +33,9 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
             iterations = 100_000
             salt, key_hex = parts[0], parts[1]
         else:
+            return False
+
+        if not 1 <= iterations <= 2_000_000:
             return False
 
         new_key = hashlib.pbkdf2_hmac(

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.models import Student, Faculty, Attendance
 from app.api.endpoints.auth import get_optional_user_payload
+from app.core.deps import require_staff
 
 router = APIRouter(prefix="/departments", tags=["Departments"])
 
@@ -34,16 +35,17 @@ def list_departments(
     db: Session = Depends(get_db)
 ):
     faculty_dept = None
-    payload = get_optional_user_payload(authorization)
-    if payload and payload.get("role") == "faculty":
+    payload = get_optional_user_payload(authorization, db)
+    if payload and payload.get("role") in ("faculty", "hod"):
         faculty = db.query(Faculty).filter(Faculty.id == int(payload.get("sub"))).first()
         faculty_dept = faculty.department if faculty else None
 
     results = []
     for dept in DEPARTMENT_REGISTRY:
         code = dept["code"]
-        student_count = db.query(func.count(Student.id)).filter(Student.department == code).scalar() or 0
-        company_count = db.query(func.count(distinct(Student.company_name))).filter(Student.department == code).scalar() or 0
+        permitted = bool(payload and (payload["role"] == "admin" or code == faculty_dept))
+        student_count = (db.query(func.count(Student.id)).filter(Student.department == code).scalar() or 0) if permitted else None
+        company_count = (db.query(func.count(distinct(Student.company_name))).filter(Student.department == code).scalar() or 0) if permitted else None
         results.append({
             **dept,
             "total_students": student_count,
@@ -61,19 +63,18 @@ def list_departments(
 @router.get("/{dept_code}")
 def get_department_roster(
     dept_code: str,
-    authorization: Optional[str] = Header(None),
+    payload: dict = Depends(require_staff),
     db: Session = Depends(get_db)
 ):
     code = dept_code.strip().upper()
-    payload = get_optional_user_payload(authorization)
 
     # Department Isolation: Faculty can ONLY access their own department roster
-    if payload and payload.get("role") == "faculty":
+    if payload.get("role") in ("faculty", "hod"):
         faculty = db.query(Faculty).filter(Faculty.id == int(payload.get("sub"))).first()
-        if faculty and faculty.department != code:
+        if not faculty or faculty.department != code:
             raise HTTPException(
                 status_code=403,
-                detail=f"Access Denied: You belong to Department {faculty.department} and cannot view the roster for {code}."
+                detail="Access denied: roster is outside your department."
             )
 
     dept_meta = next((d for d in DEPARTMENT_REGISTRY if d["code"] == code), {
@@ -89,7 +90,7 @@ def get_department_roster(
     for s in students:
         records = db.query(Attendance).filter(Attendance.student_id == s.id).all()
         tot = len(records)
-        pres = sum(1 for r in records if r.status in ("Present", "Corrected"))
+        pres = sum(1 for r in records if r.status in ("Present", "Corrected", "Present / Verified"))
         pct = round((pres / tot * 100.0), 1) if tot > 0 else 0.0
 
         student_items.append({
@@ -106,7 +107,11 @@ def get_department_roster(
 
     return {
         "success": True,
-        "department": dept_meta,
+        "department": {
+            **dept_meta,
+            "total_students": len(student_items),
+            "total_companies": len({s.company_name.strip() for s in students if s.company_name and s.company_name.strip()}),
+        },
         "total_enrolled": len(student_items),
         "students": student_items,
     }

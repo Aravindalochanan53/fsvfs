@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../services/api";
 import { 
@@ -8,18 +8,13 @@ import {
   FileCheck, 
   ArrowRight, 
   ShieldCheck, 
-  GraduationCap,
   Sparkles,
-  Award,
   Lock,
   AlertTriangle,
-  Clock,
-  CheckCircle2,
   XCircle,
-  FileText,
   Edit,
-  History,
-  Check
+  Check,
+  RefreshCw
 } from "lucide-react";
 
 export default function FacultyHome({ setView }) {
@@ -43,20 +38,20 @@ export default function FacultyHome({ setView }) {
   const [reviewFeedback, setReviewFeedback] = useState("");
   const [unlockedSections, setUnlockedSections] = useState([]);
   const [actionMsg, setActionMsg] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [exceptionReview, setExceptionReview] = useState(null);
+  const [exceptionNotes, setExceptionNotes] = useState('');
+  const [exceptionError, setExceptionError] = useState('');
 
-  useEffect(() => {
-    loadDashboardData();
-  }, []);
-
-  const loadDashboardData = async () => {
+  const loadDashboardData = useCallback(async () => {
     try {
       setStatsLoading(true);
       const [sumRes, alertsRes, reviewsRes, excRes, watchRes] = await Promise.all([
-        api.getConsolidateSummary().catch(() => null),
-        api.getFacultyAlerts().catch(() => ({ alerts: [] })),
-        api.getFacultyReviewList().catch(() => ({ reports: [] })),
-        api.getPendingExceptions().catch(() => ({ exceptions: [] })),
-        api.getLowAttendanceWatchlist(75.0).catch(() => ({ watchlist: [] }))
+        api.getConsolidateSummary(),
+        api.getFacultyAlerts(),
+        api.getFacultyReviewList(),
+        api.getPendingExceptions(),
+        api.getLowAttendanceWatchlist(75.0)
       ]);
       setStats(sumRes);
       setAlerts(alertsRes?.alerts || []);
@@ -64,31 +59,78 @@ export default function FacultyHome({ setView }) {
       setPendingExceptions(excRes?.exceptions || []);
       setWatchlist(watchRes?.watchlist || []);
       setStatsError(false);
-    } catch {
+    } catch (err) {
       setStatsError(true);
+      setActionMsg(`Dashboard could not refresh: ${err.message}`);
     } finally {
       setStatsLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    let ignore = false;
+    const fetchData = async () => {
+      try {
+        const [sumRes, alertsRes, reviewsRes, excRes, watchRes] = await Promise.all([
+          api.getConsolidateSummary(),
+          api.getFacultyAlerts(),
+          api.getFacultyReviewList(),
+          api.getPendingExceptions(),
+          api.getLowAttendanceWatchlist(75.0)
+        ]);
+        if (!ignore) {
+          setStats(sumRes);
+          setAlerts(alertsRes?.alerts || []);
+          setReviewList(reviewsRes?.reports || []);
+          setPendingExceptions(excRes?.exceptions || []);
+          setWatchlist(watchRes?.watchlist || []);
+          setStatsError(false);
+        }
+      } catch (err) {
+        if (!ignore) { setStatsError(true); setActionMsg(`Dashboard could not load: ${err.message}`); }
+      } finally {
+        if (!ignore) setStatsLoading(false);
+      }
+    };
+    fetchData();
+    return () => {
+      ignore = true;
+    };
+  }, []);
 
   const handleReviewException = async (exceptionId, decision) => {
-    const notes = window.prompt(`Enter review notes for marking as ${decision.toUpperCase()}:`, decision === "approved" ? "Approved by faculty mentor" : "Insufficient justification");
-    if (notes === null) return;
+    setExceptionReview({ id: exceptionId, decision });
+    setExceptionNotes('');
+    setExceptionError('');
+  };
+
+  const confirmExceptionReview = async (event) => {
+    event.preventDefault();
+    if (!exceptionReview || isSubmitting) return;
+    const { id: exceptionId, decision } = exceptionReview;
+    setIsSubmitting(true);
+    setExceptionError('');
     try {
-      await api.reviewException(exceptionId, decision, notes);
+      await api.reviewException(exceptionId, decision, exceptionNotes.trim());
+      setPendingExceptions((current) => current.filter((item) => item.id !== exceptionId));
+      setExceptionReview(null);
       setActionMsg(`✅ Exception request marked as ${decision.toUpperCase()}`);
       await loadDashboardData();
     } catch (err) {
+      setExceptionError(err.message);
       setActionMsg(`❌ Exception review failed: ${err.message}`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleCorrectAttendance = async () => {
-    if (!selectedAlert) return;
+    if (!selectedAlert || isSubmitting) return;
     if (!correctionReason.trim() || correctionReason.trim().length < 5) {
       setActionMsg("❌ Mandatory reason (minimum 5 characters) required for immutable audit logging.");
       return;
     }
+    setIsSubmitting(true);
     try {
       const res = await api.correctAttendance(
         selectedAlert.id,
@@ -102,15 +144,18 @@ export default function FacultyHome({ setView }) {
       await loadDashboardData();
     } catch (err) {
       setActionMsg(`❌ Correction failed: ${err.message}`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleReviewReport = async () => {
-    if (!selectedReport) return;
+    if (!selectedReport || isSubmitting) return;
     if (!reviewFeedback.trim() || reviewFeedback.trim().length < 3) {
       setActionMsg("❌ Evaluation comments/feedback required before completing review.");
       return;
     }
+    setIsSubmitting(true);
     try {
       const res = await api.reviewReport(
         selectedReport.id,
@@ -125,13 +170,15 @@ export default function FacultyHome({ setView }) {
       await loadDashboardData();
     } catch (err) {
       setActionMsg(`❌ Review submission failed: ${err.message}`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="app-container" style={{ padding: "30px 20px 60px" }}>
+    <div className="app-container faculty-overview" style={{ padding: "30px 20px 60px" }}>
       {/* Welcome Banner */}
-      <div style={{
+      <div className="overview-welcome" style={{
         marginTop: 10,
         background: "linear-gradient(135deg, #ffffff, #f0fdf4)",
         border: "1.5px solid #bbf7d0",
@@ -164,12 +211,20 @@ export default function FacultyHome({ setView }) {
             Welcome, {user?.faculty_name || "Faculty Coordinator"}
           </h2>
           <p style={{ color: "var(--text-dim)", fontSize: "0.92rem", marginTop: 4 }}>
-            Faculty ID: <span className="mono" style={{ color: "var(--text-primary)", fontWeight: 700 }}>{user?.roll_number}</span> · 
+            Faculty ID: <span className="mono" style={{ color: "var(--text-primary)", fontWeight: 700 }}>{user?.faculty_id}</span> ·
             Authorized Department: <strong style={{ color: "var(--green-primary)" }}>Department of {facultyDept}</strong>
           </p>
         </div>
 
-        <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button
+            className="btn btn-secondary"
+            onClick={loadDashboardData}
+            disabled={statsLoading}
+            style={{ padding: "10px 16px", fontSize: "0.88rem" }}
+          >
+            <RefreshCw size={15} className={statsLoading ? "spin" : ""} /> Refresh
+          </button>
           <button
             className="btn btn-primary"
             onClick={() => setView("departments")}
@@ -196,7 +251,7 @@ export default function FacultyHome({ setView }) {
       }}>
         <Lock size={18} />
         <span>
-          <strong>Department Isolation Active:</strong> Authorized to review, audit, correct attendance records, and grade reports for <strong>Department of {facultyDept}</strong> students only.
+          <strong>Your department workspace:</strong> Attendance, students and internship records for <strong>{facultyDept}</strong>.
         </span>
       </div>
 
@@ -292,14 +347,14 @@ export default function FacultyHome({ setView }) {
               {alerts.length > 0 ? (
                 alerts.map(a => (
                   <tr key={a.id}>
-                    <td className="mono">{a.attendance_date}</td>
+                    <td className="mono">{a.date}</td>
                     <td style={{ fontWeight: 600 }}>{a.student_name}</td>
-                    <td className="mono">{a.register_no}</td>
+                    <td className="mono">{a.roll_number}</td>
                     <td><span className="badge badge-danger">{a.status}</span></td>
-                    <td>{a.in_distance !== null ? `${a.in_distance}km` : "—"}</td>
+                    <td>{a.in_distance_m != null ? `${a.in_distance_m} m` : "—"}</td>
                     <td>{a.working_hours}h</td>
                     <td style={{ fontSize: "0.8rem", color: "var(--danger)" }}>
-                      {(a.suspicious_flags || []).join(", ") || a.status}
+                      {(a.verification_flags || []).join(", ") || a.status}
                     </td>
                     <td>
                       <button
@@ -330,7 +385,7 @@ export default function FacultyHome({ setView }) {
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <FileCheck size={20} color="var(--green-primary)" />
             <h4 style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)" }}>
-              21-Section Internship Report Review Queue
+              Student Internship Reports
             </h4>
           </div>
           <span className="badge badge-info">{reviewList.length} Reports</span>
@@ -370,13 +425,7 @@ export default function FacultyHome({ setView }) {
                       </span>
                     </td>
                     <td>
-                      <button
-                        className="btn btn-primary"
-                        onClick={() => setSelectedReport(r)}
-                        style={{ padding: "4px 12px", fontSize: "0.78rem" }}
-                      >
-                        Evaluate
-                      </button>
+                      <span className="badge badge-info">{r.completion_pct === 100 ? 'Complete' : 'In progress'} · No approval required</span>
                     </td>
                   </tr>
                 ))
@@ -548,9 +597,9 @@ export default function FacultyHome({ setView }) {
             </p>
 
             <div style={{ marginBottom: 14 }}>
-              <label className="label">New Attendance Status</label>
+              <label className="form-label" style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>New Attendance Status</label>
               <select
-                className="input"
+                className="form-select"
                 value={correctionStatus}
                 onChange={e => setCorrectionStatus(e.target.value)}
               >
@@ -562,20 +611,20 @@ export default function FacultyHome({ setView }) {
             </div>
 
             <div style={{ marginBottom: 14 }}>
-              <label className="label">Awarded Working Hours</label>
+              <label className="form-label" style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Awarded Working Hours</label>
               <input
                 type="number"
                 step="0.5"
-                className="input"
+                className="form-input"
                 value={correctionHours}
                 onChange={e => setCorrectionHours(parseFloat(e.target.value))}
               />
             </div>
 
             <div style={{ marginBottom: 18 }}>
-              <label className="label">Mandatory Correction Reason (Audit Trail) *</label>
+              <label className="form-label" style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Mandatory Correction Reason (Audit Trail) *</label>
               <textarea
-                className="input"
+                className="form-textarea"
                 rows={3}
                 placeholder="Specify reason (e.g. In-person industrial site visit verified by guide, approved remote day...)"
                 value={correctionReason}
@@ -584,17 +633,32 @@ export default function FacultyHome({ setView }) {
             </div>
 
             <div className="modal-actions">
-              <button className="btn btn-secondary" onClick={() => setSelectedAlert(null)}>
+              <button className="btn btn-secondary" onClick={() => setSelectedAlert(null)} disabled={isSubmitting}>
                 Cancel
               </button>
-              <button className="btn btn-primary" onClick={handleCorrectAttendance}>
-                Commit Immutable Correction
+              <button className="btn btn-primary" onClick={handleCorrectAttendance} disabled={isSubmitting}>
+                {isSubmitting ? "Committing..." : "Commit Immutable Correction"}
               </button>
             </div>
           </div>
         </div>
       )}
 
+      {exceptionReview && (
+        <div className="modal-overlay">
+          <form className="modal-content" role="dialog" aria-modal="true" aria-labelledby="exception-review-title" onSubmit={confirmExceptionReview} onKeyDown={(event) => { if (event.key === 'Escape' && !isSubmitting) setExceptionReview(null); }} style={{ maxWidth: 520 }}>
+            <h3 id="exception-review-title">{exceptionReview.decision === 'approved' ? 'Approve attendance request' : 'Reject attendance request'}</h3>
+            <p style={{ margin: '12px 0', fontSize: '.85rem', color: 'var(--text-dim)' }}>Review this student's attendance exception and confirm your decision.</p>
+            <label className="label" htmlFor="exception-review-notes">Review notes (optional)</label>
+            <textarea id="exception-review-notes" className="form-textarea" rows={4} autoFocus value={exceptionNotes} onChange={(event) => setExceptionNotes(event.target.value)} disabled={isSubmitting} />
+            {exceptionError && <p role="alert" style={{ color: 'var(--danger)', marginTop: 12 }}>{exceptionError}</p>}
+            <div className="modal-actions" style={{ marginTop: 20 }}>
+              <button type="button" className="btn btn-secondary" disabled={isSubmitting} onClick={() => setExceptionReview(null)}>Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={isSubmitting}>{isSubmitting ? 'Saving…' : exceptionReview.decision === 'approved' ? 'Confirm approval' : 'Confirm rejection'}</button>
+            </div>
+          </form>
+        </div>
+      )}
       {/* Modal: Evaluate Internship Report */}
       {selectedReport && (
         <div className="modal-overlay">
@@ -607,9 +671,9 @@ export default function FacultyHome({ setView }) {
             </p>
 
             <div style={{ marginBottom: 14 }}>
-              <label className="label">Evaluation Decision</label>
+              <label className="form-label" style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Evaluation Decision</label>
               <select
-                className="input"
+                className="form-select"
                 value={reviewDecision}
                 onChange={e => setReviewDecision(e.target.value)}
               >
@@ -621,7 +685,7 @@ export default function FacultyHome({ setView }) {
 
             {reviewDecision === "Changes Requested" && (
               <div style={{ marginBottom: 14 }}>
-                <label className="label">Select Sections to Unlock for Student Revision</label>
+                <label className="form-label" style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Select Sections to Unlock for Student Revision</label>
                 <div className="grid-2-col" style={{ gap: 8, fontSize: "0.82rem", background: "#f8fafc", padding: 12, borderRadius: 6 }}>
                   {["system_methodology", "work_completed", "evidence_screenshots", "challenges_solutions", "conclusion"].map(sec => (
                     <label key={sec} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
@@ -641,9 +705,9 @@ export default function FacultyHome({ setView }) {
             )}
 
             <div style={{ marginBottom: 18 }}>
-              <label className="label">Faculty Feedback / Evaluation Notes *</label>
+              <label className="form-label" style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Faculty Feedback / Evaluation Notes *</label>
               <textarea
-                className="input"
+                className="form-textarea"
                 rows={3}
                 placeholder="Detailed critique, corrections needed, or commendation..."
                 value={reviewFeedback}
@@ -652,11 +716,11 @@ export default function FacultyHome({ setView }) {
             </div>
 
             <div className="modal-actions">
-              <button className="btn btn-secondary" onClick={() => setSelectedReport(null)}>
+              <button className="btn btn-secondary" onClick={() => setSelectedReport(null)} disabled={isSubmitting}>
                 Cancel
               </button>
-              <button className="btn btn-primary" onClick={handleReviewReport}>
-                Submit Evaluation
+              <button className="btn btn-primary" onClick={handleReviewReport} disabled={isSubmitting}>
+                {isSubmitting ? "Submitting..." : "Submit Evaluation"}
               </button>
             </div>
           </div>

@@ -4,7 +4,32 @@ from sqlalchemy.orm import Session
 
 from app.core.security import decode_access_token
 from app.db.session import get_db
-from app.models.models import Student, Faculty
+from app.models.models import Student, Faculty, UserSession
+
+
+def validate_identity(payload: dict | None, db: Session) -> dict | None:
+    """Reject revoked sessions, disabled accounts and stale server-side roles."""
+    if not payload or payload.get("role") not in ("student", "faculty", "hod", "admin"):
+        return None
+    try:
+        uid = int(payload["sub"])
+    except (KeyError, ValueError, TypeError):
+        return None
+    if uid <= 0 or not payload.get("sid"):
+        return None
+    session = db.query(UserSession).filter(
+        UserSession.session_id == payload["sid"],
+        UserSession.user_id == uid,
+        UserSession.user_role == payload["role"],
+        # SQL Server BIT uses equality; `IS True` compiles to invalid `IS 1`.
+        UserSession.is_active == True,  # noqa: E712
+    ).first()
+    account = db.get(Student if payload["role"] == "student" else Faculty, uid)
+    if not session or not account or not account.is_active:
+        return None
+    if payload["role"] != "student" and (account.role or "faculty") != payload["role"]:
+        return None
+    return payload
 
 
 def _extract_token(request: Request) -> str | None:
@@ -14,11 +39,11 @@ def _extract_token(request: Request) -> str | None:
     return auth.split(" ", 1)[1].strip() or None
 
 
-def get_token_payload(request: Request) -> dict | None:
+def get_token_payload(request: Request, db: Session = Depends(get_db)) -> dict | None:
     token = _extract_token(request)
     if not token:
         return None
-    return decode_access_token(token)
+    return validate_identity(decode_access_token(token), db)
 
 
 def require_auth(payload: dict | None = Depends(get_token_payload)) -> dict:
@@ -89,9 +114,8 @@ def ensure_student_access(
 
 
 def client_ip(request: Request) -> str | None:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    # Forwarded headers must be interpreted only by a trusted ASGI proxy,
+    # not accepted directly from arbitrary clients for rate limiting.
     return request.client.host if request.client else None
 
 

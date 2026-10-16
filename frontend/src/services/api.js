@@ -1,7 +1,7 @@
 const API_BASE = (import.meta.env.VITE_API_BASE || "/api").replace(/\/$/, "");
 
 function getAuthHeaders() {
-  const token = localStorage.getItem("kec_token");
+  const token = sessionStorage.getItem("kec_token");
   const headers = { "Content-Type": "application/json" };
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
@@ -17,7 +17,7 @@ async function request(endpoint, options = {}) {
     Object.assign(headers, options.headers);
   }
 
-  const token = localStorage.getItem("kec_token");
+  const token = sessionStorage.getItem("kec_token");
   if (options.isFormData && token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
@@ -31,16 +31,37 @@ async function request(endpoint, options = {}) {
     const response = await fetch(url, config);
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
+      if (response.status === 401 && !endpoint.startsWith('/auth/')) {
+        window.dispatchEvent(new Event('kec-session-expired'));
+      }
       const detail = data.detail || data.message;
-      const message = Array.isArray(detail)
-        ? detail.map((item) => `${(item.loc || []).filter((part) => part !== "body").join(".")}: ${item.msg || "Invalid value"}`).join("; ")
-        : typeof detail === "string" ? detail : `Request failed (${response.status})`;
+      let message;
+      if (response.status === 404) {
+        message = typeof detail === "string" ? detail : `Endpoint not found (404): ${endpoint}. Please verify the backend service is running.`;
+      } else if (response.status === 401) {
+        message = typeof detail === "string" ? detail : "Invalid credentials or your session has expired.";
+      } else if (response.status === 403) {
+        message = typeof detail === "string" ? detail : "Access denied (403): You do not have permission for this action.";
+      } else if (Array.isArray(detail)) {
+        message = detail.map((item) => `${(item.loc || []).filter((part) => part !== "body").join(".")}: ${item.msg || "Invalid value"}`).join("; ");
+      } else if (typeof detail === "string") {
+        message = detail;
+      } else {
+        message = `Request failed with HTTP status ${response.status}`;
+      }
       const error = new Error(message);
       error.status = response.status;
+      error.data = data;
       throw error;
     }
     return data;
   } catch (err) {
+    if (err.name === "TypeError" && (err.message.includes("fetch") || err.message.includes("Failed to fetch") || err.message.includes("NetworkError"))) {
+      const netErr = new Error(`Cannot connect to backend server at ${API_BASE}. Please ensure the FastAPI backend is running.`);
+      netErr.status = 0;
+      console.error(`Network connection error on ${endpoint}:`, netErr);
+      throw netErr;
+    }
     console.error(`API Error on ${endpoint}:`, err);
     throw err;
   }
@@ -73,6 +94,8 @@ export const api = {
     }),
 
   getMe: () => request("/auth/me"),
+  getRegistrationWorkplaces: () => request("/auth/workplaces"),
+  logout: () => request("/auth/logout", { method: "POST" }),
 
   // Strict Tamper-Resistant Attendance
   getTodayAttendance: () => request("/attendance/today"),
@@ -182,9 +205,8 @@ export const api = {
   getPendingExceptions: () => request("/exceptions/pending"),
 
   reviewException: (exceptionId, status, review_notes = "") =>
-    request(`/exceptions/${exceptionId}/review`, {
+    request(`/exceptions/${exceptionId}/review?${new URLSearchParams({ status, review_notes })}`, {
       method: "PATCH",
-      body: JSON.stringify({ status, review_notes }),
     }),
 
   getLowAttendanceWatchlist: (threshold = 75.0) =>

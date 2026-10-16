@@ -5,6 +5,7 @@ Strict policy: logging in NEVER creates or modifies attendance. Students must
 explicitly GPS check-in at their workplace.
 """
 from datetime import datetime, timezone
+import secrets
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Request
@@ -21,9 +22,9 @@ from app.core.security import (
     new_session_id,
     verify_password,
 )
-from app.core.deps import client_ip, device_meta
+from app.core.deps import client_ip, device_meta, validate_identity
 from app.db.session import get_db
-from app.models.models import Faculty, Student, UserSession
+from app.models.models import Faculty, Student, UserSession, Company
 from app.schemas.schemas import (
     FacultySignupRequest,
     LoginRequest,
@@ -48,15 +49,15 @@ def get_token_from_header(authorization: Optional[str] = Header(None)) -> Option
     return authorization or None
 
 
-def get_optional_user_payload(authorization: Optional[str] = Header(None)) -> Optional[dict]:
+def get_optional_user_payload(authorization: Optional[str], db: Session) -> Optional[dict]:
     token = get_token_from_header(authorization)
     if not token:
         return None
-    return decode_access_token(token)
+    return validate_identity(decode_access_token(token), db)
 
 
-def get_current_user_payload(authorization: Optional[str] = Header(None)) -> dict:
-    payload = get_optional_user_payload(authorization)
+def get_current_user_payload(authorization: Optional[str], db: Session) -> dict:
+    payload = get_optional_user_payload(authorization, db)
     if not payload:
         raise HTTPException(status_code=401, detail="Authentication token required or invalid")
     return payload
@@ -108,16 +109,24 @@ def _faculty_user(faculty: Faculty) -> dict:
 
 # ── Student auth ────────────────────────────────────────────────────────────
 
+@router.get("/workplaces")
+def registration_workplaces(db: Session = Depends(get_db)):
+    """Public registration metadata; no contacts or student counts."""
+    return {"workplaces": [{"name": c.name} for c in db.query(Company).filter(Company.is_active == True).order_by(Company.name).all()]}  # noqa: E712
+
 @router.post("/student/login")
 def student_login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
     roll = req.roll_number.strip().upper()
     login_limiter(f"student:{roll}:{client_ip(request)}", settings.RATE_LIMIT_LOGIN_PER_MINUTE)
+    login_limiter(f"login-ip:{client_ip(request)}", settings.RATE_LIMIT_LOGIN_PER_MINUTE * 4)
 
     student = db.query(Student).filter(Student.roll_number == roll).first()
     if not student or not student.is_active or not verify_password(req.password, student.password):
         raise HTTPException(status_code=401, detail=_INVALID_CREDENTIALS)
 
     user_data = _student_user(student)
+    if not student.password.startswith("pbkdf2_sha256$200000$"):
+        student.password = get_password_hash(req.password)
     tokens = _issue_tokens(db, student.id, "student", request)
     return {
         "success": True,
@@ -131,12 +140,19 @@ def student_login(req: LoginRequest, request: Request, db: Session = Depends(get
 
 @router.post("/student/signup")
 def student_signup(req: StudentSignupRequest, request: Request, db: Session = Depends(get_db)):
+    login_limiter(f"student-signup:{client_ip(request)}", settings.RATE_LIMIT_LOGIN_PER_MINUTE)
     if req.confirm_password is not None and req.password != req.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match")
 
     roll = req.roll_number.strip().upper()
     if db.query(Student).filter(Student.roll_number == roll).first():
         raise HTTPException(status_code=409, detail=f"Roll number {roll} already registered")
+
+    # Students may select an institution-configured workplace, never set their
+    # own geofence to their current/home location during registration.
+    company = db.query(Company).filter(Company.name == req.company_name.strip(), Company.is_active == True).first()  # noqa: E712
+    if not company:
+        raise HTTPException(status_code=400, detail="Select a registered workplace. Contact your coordinator if it is not listed.")
 
     student = Student(
         roll_number=roll,
@@ -148,8 +164,9 @@ def student_signup(req: StudentSignupRequest, request: Request, db: Session = De
         duration=req.duration or "30 Days",
         start_date=req.start_date,
         end_date=req.end_date,
-        company_name=req.company_name.strip(),
-        company_location=req.company_location or "11.2742,77.6070",
+        company_id=company.id,
+        company_name=company.name,
+        company_location=f"{company.latitude},{company.longitude}",
     )
     db.add(student)
     db.commit()
@@ -173,6 +190,7 @@ def student_signup(req: StudentSignupRequest, request: Request, db: Session = De
 def faculty_login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
     fid = req.roll_number.strip().upper()
     login_limiter(f"faculty:{fid}:{client_ip(request)}", settings.RATE_LIMIT_LOGIN_PER_MINUTE)
+    login_limiter(f"login-ip:{client_ip(request)}", settings.RATE_LIMIT_LOGIN_PER_MINUTE * 4)
 
     faculty = db.query(Faculty).filter(Faculty.faculty_id == fid).first()
     if not faculty or not faculty.is_active or not verify_password(req.password, faculty.password):
@@ -180,6 +198,8 @@ def faculty_login(req: LoginRequest, request: Request, db: Session = Depends(get
 
     role = faculty.role or "faculty"
     user_data = _faculty_user(faculty)
+    if not faculty.password.startswith("pbkdf2_sha256$200000$"):
+        faculty.password = get_password_hash(req.password)
     tokens = _issue_tokens(db, faculty.id, role, request)
     return {
         "success": True,
@@ -193,6 +213,11 @@ def faculty_login(req: LoginRequest, request: Request, db: Session = Depends(get
 
 @router.post("/faculty/signup")
 def faculty_signup(req: FacultySignupRequest, request: Request, db: Session = Depends(get_db)):
+    login_limiter(f"faculty-signup:{client_ip(request)}", settings.RATE_LIMIT_LOGIN_PER_MINUTE)
+    if not settings.FACULTY_REGISTRATION_CODE:
+        raise HTTPException(status_code=403, detail="Faculty self-registration is disabled. Contact the portal administrator for an account.")
+    if not secrets.compare_digest(req.registration_code.encode(), settings.FACULTY_REGISTRATION_CODE.encode()):
+        raise HTTPException(status_code=403, detail="A valid faculty invitation code is required.")
     if req.confirm_password is not None and req.password != req.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match")
 
@@ -243,7 +268,7 @@ def faculty_signup(req: FacultySignupRequest, request: Request, db: Session = De
 
 @router.post("/refresh")
 def refresh_access_token(req: RefreshRequest, db: Session = Depends(get_db)):
-    payload = decode_refresh_token(req.refresh_token)
+    payload = validate_identity(decode_refresh_token(req.refresh_token), db)
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
 
@@ -268,7 +293,7 @@ def logout(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
-    payload = get_current_user_payload(authorization)
+    payload = get_current_user_payload(authorization, db)
     sid = payload.get("sid")
     if sid:
         session = db.query(UserSession).filter(UserSession.session_id == sid).first()
@@ -276,13 +301,6 @@ def logout(
             session.is_active = False
             session.revoked_at = datetime.now(timezone.utc)
             db.commit()
-    # Also retire any other active sessions for this user (defensive).
-    db.query(UserSession).filter(
-        UserSession.user_id == int(payload["sub"]),
-        UserSession.user_role == payload["role"],
-        UserSession.is_active.is_(True),
-    ).update({"is_active": False, "revoked_at": datetime.now(timezone.utc)})
-    db.commit()
     return {"success": True, "message": "Logged out"}
 
 
@@ -291,7 +309,7 @@ def get_current_user_profile(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
-    payload = get_current_user_payload(authorization)
+    payload = get_current_user_payload(authorization, db)
     role = payload.get("role")
     sub = int(payload.get("sub"))
 

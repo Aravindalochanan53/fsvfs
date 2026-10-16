@@ -16,7 +16,7 @@ from app.models.models import Attendance, Faculty, InternshipReport, Student
 
 router = APIRouter(prefix="/students", tags=["Students"])
 
-PRESENT_STATES = ("Present", "Corrected")
+PRESENT_STATES = ("Present", "Corrected", "Present / Verified")
 
 
 def _attendance_pct(records: list) -> float:

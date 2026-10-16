@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { api } from "../services/api";
 
 const AuthContext = createContext(null);
@@ -9,59 +9,36 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [networkError, setNetworkError] = useState(false);
 
-  useEffect(() => {
-    const token = localStorage.getItem("kec_token");
-    const storedRole = localStorage.getItem("kec_role");
-
-    if (token && storedRole) {
-      api.getMe()
-        .then((res) => {
-          setUser(res.user);
-          setRole(res.role);
-          setNetworkError(false);
-        })
-        .catch((err) => {
-          // Only clear auth if the error is a genuine 401/403 (not a network outage)
-          const message = err?.message || "";
-          const isAuthFailure =
-            message.includes("401") ||
-            message.includes("403") ||
-            message.includes("Invalid or expired") ||
-            message.includes("Authentication token required") ||
-            message.includes("User not found");
-
-          if (isAuthFailure) {
-            // Token is invalid or expired — clear session cleanly
-            logout();
-          } else {
-            // Network/server unreachable — preserve stored role so user can retry
-            setRole(storedRole);
-            setNetworkError(true);
-          }
-        })
-        .finally(() => {
-          setLoading(false);
-        });
-    } else {
-      setLoading(false);
+  const logout = useCallback(() => {
+    if (sessionStorage.getItem("kec_token")) {
+      api.logout().catch(() => { /* Local sign-out still works during a network outage. */ });
     }
+    sessionStorage.removeItem("kec_token");
+    sessionStorage.removeItem("kec_role");
+    setRole(null);
+    setUser(null);
+    setNetworkError(false);
   }, []);
 
-  const login = (token, userRole, userData) => {
-    localStorage.setItem("kec_token", token);
-    localStorage.setItem("kec_role", userRole);
+  const login = useCallback((token, userRole, userData) => {
+    sessionStorage.setItem("kec_token", token);
+    sessionStorage.setItem("kec_role", userRole);
     setRole(userRole);
     setUser(userData);
     setNetworkError(false);
-  };
+  }, []);
 
-  const logout = () => {
-    localStorage.removeItem("kec_token");
-    localStorage.removeItem("kec_role");
-    setUser(null);
-    setRole(null);
-    setNetworkError(false);
-  };
+  useEffect(() => {
+    // Require an explicit login on every fresh app load. Stored credentials
+    // are only used by API requests during this mounted application session.
+    logout();
+    setLoading(false);
+  }, [logout]);
+
+  useEffect(() => {
+    window.addEventListener('kec-session-expired', logout);
+    return () => window.removeEventListener('kec-session-expired', logout);
+  }, [logout]);
 
   return (
     <AuthContext.Provider

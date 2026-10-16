@@ -29,6 +29,7 @@ class StudentSignupRequest(BaseModel):
 
 
 class FacultySignupRequest(BaseModel):
+    registration_code: str = Field(default="", max_length=200)
     faculty_id: str = Field(min_length=3, max_length=50)
     faculty_name: str = Field(min_length=2, max_length=150)
     password: str = Field(min_length=6, max_length=128)
@@ -152,10 +153,10 @@ class CompanyCreate(BaseModel):
 
 
 class CompanyUpdate(BaseModel):
-    name: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=2, max_length=150)
     location_label: Optional[str] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
     geofence_radius_m: Optional[float] = Field(default=None, ge=50, le=5000)
     contact_email: Optional[str] = None
     contact_phone: Optional[str] = None
@@ -201,8 +202,8 @@ class DepartmentInfo(BaseModel):
 
 class AttendanceCorrectionRequest(BaseModel):
     attendance_id: int
-    new_status: str
-    new_working_hours: Optional[float] = None
+    new_status: str = Field(pattern=r"^(Present / Verified|Present|Corrected|Half Day|Incomplete|Absent|Pending Verification|Checked In / Pending Completion|Location Exception / Pending Faculty Approval)$")
+    new_working_hours: Optional[float] = Field(default=None, ge=0, le=24)
     reason: str = Field(min_length=5, max_length=2000)
 
 

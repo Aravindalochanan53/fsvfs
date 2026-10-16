@@ -15,7 +15,8 @@ export default function FacultySignup({ setView }) {
     student_name: "", // Faculty name
     password: "",
     confirm_password: "",
-    department: "CSE"
+    department: "CSE",
+    registration_code: ""
   });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -102,6 +103,13 @@ export default function FacultySignup({ setView }) {
         )}
 
         <form onSubmit={handleSubmit}>
+          <div className="form-group">
+            <label htmlFor="faculty-invite">Faculty invitation code *</label>
+            <input id="faculty-invite" type="password" className="form-input" autoComplete="off"
+              value={formData.registration_code} required maxLength={200}
+              onChange={(e) => setFormData({ ...formData, registration_code: e.target.value })} />
+            <small>Request this code from your portal administrator. Existing accounts can sign in normally.</small>
+          </div>
           <div className="form-group">
             <label>Kongu Faculty ID *</label>
             <input

@@ -5,7 +5,7 @@ export default function Footer() {
     <footer className="site-footer">
       <div className="footer-content">
         <h4 style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)" }}>
-          🏛️ Kongu Engineering College
+          Kongu Engineering College
         </h4>
         <p style={{ color: "var(--text-dim)", fontSize: "0.85rem", marginTop: 4 }}>
           Autonomous Institution · Affiliated to Anna University · Accredited by NAAC with 'A++' Grade

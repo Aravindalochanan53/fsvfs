@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from app.db.session import get_db
 from app.models.models import InternshipReport, ReportVersionHistory, Student, Faculty, Attendance, FacultyReportComment
 from app.core.config import settings
+from app.core.deps import ensure_student_access
 from app.api.endpoints.auth import get_current_user_payload
 from app.schemas.schemas import FacultyReportCommentCreate
 
@@ -42,6 +43,20 @@ def calculate_completion(sections: dict) -> tuple[float, list[str]]:
     """Calculates completion percentage based on the 21 mandatory sections."""
     if not isinstance(sections, dict):
         return 0.0, [k for k, _ in MANDATORY_SECTIONS]
+
+    if sections.get("report_format") == "legacy_php_v1":
+        required = (
+            "student_name reg_no department year_sem acad_year abstract "
+            "company_name company_location industry_type company_overview mentor_name mentor_desig "
+            "start_date end_date duration mode training_overview sec41 sec42 sec43 "
+            "tools_used tools_desc phase1 phase2 phase3 phase4 summary skills_gained "
+            "future_scope offer_letter_no sdg_goals sdg_mapping"
+        ).split()
+        values = sections.get("legacy_report")
+        if not isinstance(values, dict):
+            return 0.0, required
+        missing = [key for key in required if not isinstance(values.get(key), str) or not values[key].strip()]
+        return round((len(required) - len(missing)) / len(required) * 100, 1), missing
 
     missing = []
     completed = 0
@@ -136,7 +151,7 @@ def get_my_report(
 ):
     """Retrieve the student's internship report, completion percentage, unlocked sections,
     and verified attendance eligibility snapshot."""
-    payload = get_current_user_payload(authorization)
+    payload = get_current_user_payload(authorization, db)
     if payload.get("role") != "student":
         raise HTTPException(status_code=403, detail="Only students can view their report draft")
 
@@ -187,14 +202,14 @@ def get_my_report(
         "reg_no": student.roll_number,
         "department": student.department,
         "company_name": student.company_name,
-        "status": report.status,
+        "status": "Complete" if comp_pct == 100 else "Draft",
         "version": report.version,
         "completion_pct": comp_pct,
         "missing_sections": missing,
         "mandatory_sections_meta": MANDATORY_SECTIONS,
         "faculty_feedback": report.faculty_feedback,
         "unlocked_sections": unlocked,
-        "is_locked": report.status in ("Submitted / Locked", "Approved"),
+        "is_locked": False,
         "sections_data": sections,
         "submitted_at": report.submitted_at.isoformat() if report.submitted_at else None,
         "reviewed_at": report.reviewed_at.isoformat() if report.reviewed_at else None,
@@ -217,7 +232,7 @@ def save_report_draft(
 ):
     """Save report draft and record a version history snapshot.
     Locked reports cannot be edited unless status is 'Changes Requested'."""
-    payload = get_current_user_payload(authorization)
+    payload = get_current_user_payload(authorization, db)
     if payload.get("role") != "student":
         raise HTTPException(status_code=403, detail="Only students can save report drafts")
 
@@ -230,12 +245,6 @@ def save_report_draft(
     if not report:
         raise HTTPException(status_code=404, detail="Report record not found")
 
-    if report.status in ("Submitted / Locked", "Approved"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Report is locked (Status: {report.status}). You cannot edit a submitted or approved report."
-        )
-
     # If Changes Requested, verify that edits are only on unlocked sections (or allow all if none specified)
     unlocked = json.loads(report.unlocked_sections) if report.unlocked_sections else []
     # Calculate updated completion percentage
@@ -244,6 +253,7 @@ def save_report_draft(
     new_version = (report.version or 1) + 1
     report.sections_data = json.dumps(req.sections_data)
     report.completion_pct = comp_pct
+    report.status = "Complete" if comp_pct == 100 else "Draft"
     report.version = new_version
 
     # Record Version History
@@ -280,7 +290,7 @@ def submit_final_report(
     - Verifies student has sufficient verified attendance (>= 75%).
     - Locks the report from further student editing.
     - Saves verified attendance summary snapshot."""
-    payload = get_current_user_payload(authorization)
+    payload = get_current_user_payload(authorization, db)
     if payload.get("role") != "student":
         raise HTTPException(status_code=403, detail="Only students can submit final reports")
 
@@ -362,14 +372,21 @@ def get_report_version_history(
     db: Session = Depends(get_db)
 ):
     """Retrieve version history of the internship report."""
-    payload = get_current_user_payload(authorization)
+    payload = get_current_user_payload(authorization, db)
     role = payload.get("role")
     sub = int(payload.get("sub"))
 
     if role == "student":
         target_id = sub
-    elif role == "faculty":
-        target_id = student_id if student_id else sub
+    elif role in ("faculty", "hod", "admin"):
+        from app.core.deps import ensure_student_access
+        if student_id is None:
+            raise HTTPException(status_code=400, detail="student_id is required for staff")
+        target = db.get(Student, student_id)
+        if not target:
+            raise HTTPException(status_code=404, detail="Student not found")
+        ensure_student_access(db, payload, target)
+        target_id = student_id
     else:
         raise HTTPException(status_code=403, detail="Unauthorized")
 
@@ -403,7 +420,7 @@ def get_department_reports_for_faculty(
     db: Session = Depends(get_db)
 ):
     """Returns submitted internship reports for faculty review in their department."""
-    payload = get_current_user_payload(authorization)
+    payload = get_current_user_payload(authorization, db)
     if payload.get("role") != "faculty":
         raise HTTPException(status_code=403, detail="Only faculty can review submitted reports")
 
@@ -449,7 +466,8 @@ def review_internship_report(
     - 'Approved': Locks report permanently with faculty signature.
     - 'Changes Requested': Unlocks specified sections with faculty feedback.
     - 'Rejected': Rejects report with mandatory explanation."""
-    payload = get_current_user_payload(authorization)
+    payload = get_current_user_payload(authorization, db)
+    raise HTTPException(status_code=410, detail="Report approval is no longer required. Students can edit and save their reports at any time.")
     if payload.get("role") != "faculty":
         raise HTTPException(status_code=403, detail="Only faculty can submit report reviews")
 
@@ -498,18 +516,19 @@ def get_report_by_id(
     db: Session = Depends(get_db)
 ):
     """Get report detail for preview and printable PDF generation."""
-    payload = get_current_user_payload(authorization)
+    payload = get_current_user_payload(authorization, db)
     report = db.query(InternshipReport).filter(InternshipReport.id == report_id).first()
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
 
     student = db.query(Student).filter(Student.id == report.student_id).first()
 
-    # Department authorization check for faculty
-    if payload.get("role") == "faculty":
-        faculty = db.query(Faculty).filter(Faculty.id == int(payload.get("sub"))).first()
-        if faculty and student and faculty.department != student.department:
-            raise HTTPException(status_code=403, detail="Access denied: Student in different department")
+    if not student:
+        # Legacy reports can be associated using their existing register number.
+        student = db.query(Student).filter(Student.roll_number == report.reg_no).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Report owner not found")
+    ensure_student_access(db, payload, student)
 
     sections = json.loads(report.sections_data) if report.sections_data else {}
     att_summary = json.loads(report.attendance_verified_summary) if report.attendance_verified_summary else None
@@ -541,6 +560,7 @@ def get_report_by_reg(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
+    get_current_user_payload(authorization, db)
     report = db.query(InternshipReport).filter(InternshipReport.reg_no == reg_no.strip().upper()).first()
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
@@ -555,7 +575,7 @@ def add_section_comment(
     db: Session = Depends(get_db)
 ):
     """Faculty attaches a review comment to a specific report section."""
-    payload = get_current_user_payload(authorization)
+    payload = get_current_user_payload(authorization, db)
     if payload.get("role") != "faculty":
         raise HTTPException(status_code=403, detail="Only faculty can add section comments")
 
@@ -565,8 +585,9 @@ def add_section_comment(
         raise HTTPException(status_code=404, detail="Report not found")
 
     student = db.get(Student, report.student_id)
-    if student and faculty and faculty.department != student.department:
-        raise HTTPException(status_code=403, detail="Student is outside your department")
+    if not student:
+        raise HTTPException(status_code=404, detail="Report owner not found")
+    ensure_student_access(db, payload, student)
 
     comment = FacultyReportComment(
         report_id=report.id,
@@ -594,15 +615,15 @@ def get_report_comments(
     db: Session = Depends(get_db)
 ):
     """Retrieve all section-specific faculty comments for a report."""
-    payload = get_current_user_payload(authorization)
+    payload = get_current_user_payload(authorization, db)
     report = db.get(InternshipReport, report_id)
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
 
-    role = payload.get("role")
-    sub = int(payload.get("sub"))
-    if role == "student" and report.student_id != sub:
-        raise HTTPException(status_code=403, detail="Access denied")
+    student = db.get(Student, report.student_id) if report.student_id else None
+    if not student:
+        raise HTTPException(status_code=404, detail="Report owner not found")
+    ensure_student_access(db, payload, student)
 
     comments = db.query(FacultyReportComment).filter(
         FacultyReportComment.report_id == report_id

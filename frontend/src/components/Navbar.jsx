@@ -9,8 +9,7 @@ import {
   Users, 
   Info, 
   LogOut, 
-  Home,
-  CheckCircle2
+  Home
 } from "lucide-react";
 
 export default function Navbar({ currentView, setView }) {
@@ -36,11 +35,11 @@ export default function Navbar({ currentView, setView }) {
               className={`nav-link-btn ${currentView === "landing" ? "active" : ""}`}
               onClick={() => setView("landing")}
             >
-              <Home size={15} /> Role Select
+              <Home size={15} /> Home
             </button>
             <button
-              className={`nav-link-btn ${currentView === "student-login" ? "active" : ""}`}
-              onClick={() => setView("student-login")}
+              className={`nav-link-btn ${currentView === "student-home" ? "active" : ""}`}
+              onClick={() => setView("student-home")}
             >
               Student Portal
             </button>
@@ -48,7 +47,7 @@ export default function Navbar({ currentView, setView }) {
               className={`nav-link-btn ${currentView === "faculty-login" ? "active" : ""}`}
               onClick={() => setView("faculty-login")}
             >
-              Faculty Portal
+              Teacher Portal
             </button>
             <button
               className={`nav-link-btn ${currentView === "about" ? "active" : ""}`}
@@ -96,7 +95,7 @@ export default function Navbar({ currentView, setView }) {
               className={`nav-link-btn ${currentView === "faculty-home" ? "active" : ""}`}
               onClick={() => setView("faculty-home")}
             >
-              <Home size={15} /> Home
+              <Home size={15} /> Faculty Dashboard
             </button>
             <button
               className={`nav-link-btn ${currentView === "departments" ? "active" : ""}`}
@@ -136,12 +135,13 @@ export default function Navbar({ currentView, setView }) {
                 {user.student_name || user.faculty_name}
               </div>
               <div style={{ fontSize: "0.68rem", color: "var(--green-primary)", fontWeight: 600 }}>
-                {user.roll_number} · {user.department || role}
+              {user.roll_number || user.faculty_id} · {user.department || role}
               </div>
             </div>
             <button
               className="logout-btn"
               title="Logout"
+              aria-label="Log out"
               onClick={() => {
                 logout();
                 setView("landing");

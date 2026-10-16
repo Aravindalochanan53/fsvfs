@@ -1,14 +1,8 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../services/api";
 import { 
   GraduationCap, 
-  MapPin, 
-  Building, 
-  Calendar, 
-  User, 
-  Lock, 
-  Compass, 
   AlertCircle, 
   ArrowRight
 } from "lucide-react";
@@ -29,36 +23,25 @@ export default function StudentSignup({ setView }) {
     year_section: "III - A",
     semester: 6,
     duration: "30 Days",
-    start_date: "2025-05-01",
-    end_date: "2025-06-30",
+    start_date: "",
+    end_date: "",
     company_name: "",
     company_location: "11.2742,77.6070",
   });
 
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [locStatus, setLocStatus] = useState("");
+  const [workplaces, setWorkplaces] = useState([]);
+  useEffect(() => {
+    let active = true;
+    api.getRegistrationWorkplaces().then((data) => {
+      if (active) setWorkplaces(data.workplaces || []);
+    }).catch((err) => { if (active) setError(err.message); });
+    return () => { active = false; };
+  }, []);
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
-  };
-
-  const handleGetLocation = () => {
-    if (!navigator.geolocation) {
-      setLocStatus("Geolocation not supported by browser");
-      return;
-    }
-    setLocStatus("Fetching GPS coordinates...");
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const coords = `${pos.coords.latitude.toFixed(6)},${pos.coords.longitude.toFixed(6)}`;
-        setFormData((prev) => ({ ...prev, company_location: coords }));
-        setLocStatus("GPS Coordinates captured! ✓");
-      },
-      (err) => {
-        setLocStatus(`GPS Error: ${err.message}`);
-      }
-    );
   };
 
   const handleSubmit = async (e) => {
@@ -274,54 +257,21 @@ export default function StudentSignup({ setView }) {
             </div>
 
             <div className="form-group" style={{ gridColumn: "1 / -1" }}>
-              <label>Company Name *</label>
-              <input
-                className="form-input"
+              <label htmlFor="registered-workplace">Registered workplace *</label>
+              <select
+                id="registered-workplace"
+                className="form-select"
                 name="company_name"
-                placeholder="e.g. Zoho Corporation / Amazon / Bosch"
                 value={formData.company_name}
                 onChange={handleChange}
                 required
-              />
+              >
+                <option value="">Select your internship company</option>
+                {workplaces.map((company) => <option key={company.name} value={company.name}>{company.name}</option>)}
+              </select>
+              <small>Your workplace coordinates are managed by the institution. If your company is missing, contact your coordinator.</small>
             </div>
 
-            <div className="form-group" style={{ gridColumn: "1 / -1" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                <label style={{ margin: 0 }}>Company GPS Coordinates (Latitude, Longitude) *</label>
-                <button
-                  type="button"
-                  onClick={handleGetLocation}
-                  style={{
-                    background: "var(--green-tint)",
-                    border: "1px solid #bbf7d0",
-                    color: "var(--green-primary)",
-                    padding: "4px 12px",
-                    borderRadius: "var(--radius-sm)",
-                    fontSize: "0.78rem",
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 5
-                  }}
-                >
-                  <Compass size={14} /> Detect My Current Location
-                </button>
-              </div>
-              <input
-                className="form-input mono"
-                name="company_location"
-                placeholder="11.2742,77.6070"
-                value={formData.company_location}
-                onChange={handleChange}
-                required
-              />
-              {locStatus && (
-                <div style={{ fontSize: "0.78rem", color: "var(--green-primary)", fontWeight: 600, marginTop: 4 }}>
-                  {locStatus}
-                </div>
-              )}
-            </div>
           </div>
 
           <button

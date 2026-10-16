@@ -90,6 +90,17 @@ def main() -> int:
         if "student_name" in faculty_columns:
             statements.append("UPDATE [dbo].[faculty] SET [faculty_name] = [student_name] WHERE [faculty_name] IS NULL")
 
+    if inspector.has_table("attendance_audit_logs", schema="dbo"):
+        audit_columns = _columns("attendance_audit_logs")
+        for name, definition in {
+            "corrected_by_user_id": "INT NULL",
+            "corrected_by_name": "NVARCHAR(150) NULL",
+            "old_working_hours": "FLOAT NULL",
+            "new_working_hours": "FLOAT NULL",
+        }.items():
+            if name not in audit_columns:
+                statements.append(f"ALTER TABLE [dbo].[attendance_audit_logs] ADD [{name}] {definition}")
+
     if not statements:
         print("Legacy students/attendance schema is already compatible; no changes made.")
         return 0

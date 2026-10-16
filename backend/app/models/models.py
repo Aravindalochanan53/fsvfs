@@ -321,6 +321,8 @@ class AttendanceAuditLog(Base):
     id = Column(Integer, primary_key=True, index=True)
     attendance_id = Column(Integer, ForeignKey("attendance.id"), nullable=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
+    action = Column(String(60), nullable=False, default="attendance.correction")
+    performed_by_role = Column(String(30), nullable=False, default="faculty")
     corrected_by_user_id = Column(Integer, nullable=True)
     corrected_by_name = Column(String(150), nullable=True)
     old_status = Column(String(50), nullable=True)

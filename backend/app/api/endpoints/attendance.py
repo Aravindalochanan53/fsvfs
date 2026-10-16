@@ -9,6 +9,7 @@ Strict Business Rules:
 6. Faculty corrections require mandatory reason and are saved to immutable AttendanceAuditLog.
 """
 import json
+import math
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
@@ -24,7 +25,7 @@ from app.models.models import (
     Attendance, AttendanceAuditLog, AttendanceException, Company, Faculty, Student
 )
 from app.schemas.schemas import CheckInRequest, CheckOutRequest, AttendanceCorrectionRequest
-from app.services.common import audit, evaluate_geofence, notify_student
+from app.services.common import audit, evaluate_geofence, notify_student, haversine_m
 
 router = APIRouter(prefix="/attendance", tags=["Attendance"])
 
@@ -46,21 +47,28 @@ def _today_ist() -> date:
 
 def _parse_coords(location_str: Optional[str]) -> tuple[float, float]:
     """Parse 'lat,lng' from a student's company location."""
-    if not location_str:
-        return 11.2742, 77.6070
     try:
         parts = [p.strip() for p in location_str.split(",")]
-        return float(parts[0]), float(parts[1])
-    except (ValueError, IndexError):
-        return 11.2742, 77.6070
+        if len(parts) != 2:
+            raise ValueError("Expected latitude,longitude")
+        lat, lng = float(parts[0]), float(parts[1])
+        if not math.isfinite(lat) or not math.isfinite(lng) or not -90 <= lat <= 90 or not -180 <= lng <= 180:
+            raise ValueError("Invalid coordinates")
+        return lat, lng
+    except (ValueError, IndexError, AttributeError):
+        raise HTTPException(status_code=409, detail="Workplace GPS coordinates are not configured. Please contact your faculty coordinator.")
 
 
 def _resolve_geofence(db: Session, student: Student) -> tuple[float, float, float, Optional[str]]:
     """Authoritative Company geofence; falls back to student's registered coords."""
     if student.company_id:
         company = db.get(Company, student.company_id)
-        if company:
+        if company and company.is_active:
+            _parse_coords(f"{company.latitude},{company.longitude}")
+            if not math.isfinite(company.geofence_radius_m) or company.geofence_radius_m <= 0:
+                raise HTTPException(status_code=409, detail="Workplace geofence radius is invalid. Contact your coordinator.")
             return company.latitude, company.longitude, company.geofence_radius_m, company.name
+        raise HTTPException(status_code=409, detail="Assigned workplace is missing or inactive. Contact your coordinator.")
     lat, lng = _parse_coords(student.company_location)
     return lat, lng, float(settings.DEFAULT_GEOFENCE_RADIUS_M), student.company_name
 
@@ -159,6 +167,7 @@ def get_today_attendance(payload: dict = Depends(require_auth), db: Session = De
             "geofence_radius_m": radius_m,
         },
         "policy": {
+            "max_accuracy_m": settings.MIN_ACCURACY_M,
             "min_work_hours_present": settings.MIN_WORK_HOURS_FOR_PRESENT,
             "min_work_hours_half_day": settings.MIN_WORK_HOURS_FOR_HALF_DAY,
         },
@@ -199,10 +208,24 @@ def check_in(
     # GPS accuracy and anti-spoofing flags
     flags = verdict["flags"] or []
     if data.accuracy_m is not None:
-        if data.accuracy_m <= 0 or data.accuracy_m > 150:
+        if data.accuracy_m <= 0 or data.accuracy_m > settings.MIN_ACCURACY_M:
             flags.append("suspicious_gps_accuracy")
 
     verified = verdict["verified"] and "suspicious_gps_accuracy" not in flags
+
+    # A rejected location must not create a check-in or consume the daily lock.
+    if not verdict["within"]:
+        raise HTTPException(status_code=400, detail=(
+            f"Check-in denied: you are {verdict['distance_m']} metres from your registered workplace. "
+            f"The allowed radius is {radius_m} metres. Please check in at the workplace."
+        ))
+    if data.accuracy_m is None or data.accuracy_m <= 0 or data.accuracy_m > settings.MIN_ACCURACY_M:
+        raise HTTPException(status_code=400, detail=(
+            f"Check-in denied: a reliable GPS location is required (accuracy within {settings.MIN_ACCURACY_M} metres). "
+            "Refresh GPS and try again."
+        ))
+    if not verified:
+        raise HTTPException(status_code=400, detail="Check-in denied: location could not be verified. Refresh GPS and retry.")
 
     # Status must be Checked In / Pending Completion. NEVER immediate Present!
     status = STATUS_CHECKED_IN if verified else STATUS_LOCATION_EXCEPTION
@@ -284,7 +307,14 @@ def check_out(
     check_in_at = record.check_in_at
     if check_in_at.tzinfo is None:
         check_in_at = check_in_at.replace(tzinfo=timezone.utc)
-    working_hours = round(max(0.0, (now - check_in_at).total_seconds()) / 3600.0, 2)
+    elapsed_hours = (now - check_in_at).total_seconds() / 3600.0
+    if elapsed_hours < 0:
+        raise HTTPException(status_code=409, detail="Check-in timestamp is in the future. Contact your coordinator.")
+    working_hours = round(elapsed_hours, 2)
+    if not data.work_summary or len(data.work_summary.strip()) < 5:
+        raise HTTPException(status_code=400, detail="Daily work summary is required (minimum 5 characters).")
+    if data.accuracy_m is None or not 0 < data.accuracy_m <= settings.MIN_ACCURACY_M:
+        raise HTTPException(status_code=400, detail="Reliable GPS accuracy is required before checking out. Refresh GPS and retry.")
 
     centre_lat, centre_lng, radius_m, _ = _resolve_geofence(db, student)
     verdict = evaluate_geofence(data.lat, data.lng, centre_lat, centre_lng, radius_m, data.accuracy_m)
@@ -295,11 +325,10 @@ def check_out(
             flags.append(f)
 
     # Impossible speed test (> 120 km/h)
-    if record.in_lat and record.in_lng and working_hours > 0.05:
-        from app.services.common import haversine_distance
-        travel_km = haversine_distance(record.in_lat, record.in_lng, data.lat, data.lng) / 1000.0
-        speed_kmh = travel_km / working_hours
-        if speed_kmh > 120.0:
+    if record.in_lat is not None and record.in_lng is not None and elapsed_hours > 0:
+        travel_km = haversine_m(record.in_lat, record.in_lng, data.lat, data.lng) / 1000.0
+        speed_kmh = travel_km / elapsed_hours
+        if speed_kmh > settings.IMPOSSIBLE_TRAVEL_KMH:
             flags.append("impossible_travel_speed")
 
     # Business rule: Present / Verified ONLY when:
@@ -307,14 +336,15 @@ def check_out(
     # 2. Checkout inside geofence
     # 3. >= 3.0 hours worked
     # 4. Daily work summary submitted
-    in_within = record.in_distance_m is not None and record.in_distance_m <= radius_m
-    out_within = verdict["verified"]
+    in_within = (record.in_distance_m is not None and record.in_distance_m <= radius_m
+                 and record.in_accuracy_m is not None and 0 < record.in_accuracy_m <= settings.MIN_ACCURACY_M)
+    out_within = verdict["verified"] and "impossible_travel_speed" not in flags
     has_summary = bool(data.work_summary and len(data.work_summary.strip()) >= 5)
 
-    if in_within and out_within and working_hours >= settings.MIN_WORK_HOURS_FOR_PRESENT and has_summary:
+    if in_within and out_within and elapsed_hours >= settings.MIN_WORK_HOURS_FOR_PRESENT and has_summary:
         status = STATUS_PRESENT
         state = STATE_VERIFIED
-    elif in_within and out_within and working_hours >= settings.MIN_WORK_HOURS_FOR_HALF_DAY:
+    elif in_within and out_within and elapsed_hours >= settings.MIN_WORK_HOURS_FOR_HALF_DAY:
         status = STATUS_HALF_DAY
         state = STATE_VERIFIED
     elif not in_within or not out_within:
@@ -360,7 +390,7 @@ def check_out(
         "working_hours": working_hours,
         "working_hours_float": working_hours,
         "check_out_at": record.check_out_at.isoformat(),
-        "location_verified": verdict["verified"],
+        "location_verified": in_within and out_within,
         "distance_m": verdict["distance_m"],
         "verification_flags": flags,
         "is_locked": True,
@@ -411,7 +441,9 @@ def get_attendance_stats(
     if role == "student":
         target_id = int(payload["sub"])
     elif role in ("faculty", "hod", "admin"):
-        target_id = student_id if student_id is not None else int(payload["sub"])
+        if student_id is None:
+            raise HTTPException(status_code=400, detail="student_id is required for staff")
+        target_id = student_id
         if student_id is not None and role in ("faculty", "hod"):
             faculty = db.get(Faculty, int(payload["sub"]))
             target_student = db.get(Student, student_id)
@@ -492,7 +524,7 @@ def get_attendance_alerts(
             "Pending Verification"
         ])) |
         (Attendance.verification_state == "pending") |
-        (Attendance.verification_flags.isnot(None))
+        ((Attendance.verification_flags.isnot(None)) & (Attendance.verification_flags != "[]"))
     ).order_by(Attendance.attendance_date.desc()).limit(100).all()
 
     alerts = []
@@ -555,8 +587,11 @@ def correct_attendance_record(
         record.working_hours = data.new_working_hours
     if data.new_status in (STATUS_PRESENT, "Present"):
         record.verification_state = STATE_VERIFIED
+        record.verification_flags = None
 
     audit_entry = AttendanceAuditLog(
+        action="attendance.correction",
+        performed_by_role=role,
         attendance_id=record.id,
         student_id=record.student_id,
         corrected_by_user_id=int(payload["sub"]),

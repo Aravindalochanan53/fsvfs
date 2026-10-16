@@ -45,7 +45,9 @@ def db_session():
 
 
 @pytest.fixture()
-def client(db_session):
+def client(db_session, tmp_path, monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "UPLOAD_DIR", tmp_path / "uploads")
     def override_get_db():
         try:
             yield db_session

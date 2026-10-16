@@ -6,6 +6,8 @@ never mounted as static files.
 """
 import os
 import uuid
+import io
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,6 +36,15 @@ _SIGNATURES = {
 
 
 def _validate_magic(content: bytes, mime: str) -> bool:
+    if mime == "image/webp":
+        return content.startswith(b"RIFF") and content[8:12] == b"WEBP"
+    if mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                names = set(archive.namelist())
+                return {"[Content_Types].xml", "word/document.xml"}.issubset(names) and not any("vbaProject" in name for name in names)
+        except (zipfile.BadZipFile, ValueError):
+            return False
     sigs = _SIGNATURES.get(mime)
     if not sigs:
         return False
@@ -67,6 +78,13 @@ async def upload_document(
         raise HTTPException(status_code=400, detail="Empty file")
 
     mime = file.content_type or ""
+    expected_extensions = {
+        "image/jpeg": {".jpg", ".jpeg"}, "image/png": {".png"},
+        "image/webp": {".webp"}, "application/pdf": {".pdf"},
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {".docx"},
+    }
+    if ext not in expected_extensions.get(mime, set()):
+        raise HTTPException(status_code=400, detail="File extension does not match its declared type")
     if mime not in settings.ALLOWED_UPLOAD_MIMES:
         raise HTTPException(status_code=400, detail=f"MIME type '{mime}' not allowed")
     if not _validate_magic(content, mime):
@@ -92,7 +110,12 @@ async def upload_document(
           entity="document", entity_id=stored_name,
           detail={"doc_type": doc_type, "size": len(content)},
           ip_address=client_ip(request))
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        dest.unlink(missing_ok=True)
+        raise
     db.refresh(doc)
 
     return {
@@ -137,8 +160,9 @@ def download_document(document_id: int, payload: dict = Depends(require_auth), d
         raise HTTPException(status_code=404, detail="Owning student not found")
     ensure_student_access(db, payload, student)
 
-    path = settings.UPLOAD_DIR / "documents" / doc.stored_name
-    if not path.exists():
+    directory = (settings.UPLOAD_DIR / "documents").resolve()
+    path = (directory / doc.stored_name).resolve()
+    if not path.is_relative_to(directory) or not path.is_file():
         raise HTTPException(status_code=404, detail="Stored file missing")
     return FileResponse(path, media_type=doc.mime_type, filename=doc.original_name)
 

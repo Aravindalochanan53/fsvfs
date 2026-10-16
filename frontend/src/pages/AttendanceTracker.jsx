@@ -1,21 +1,16 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { api } from "../services/api";
+import { requestFreshPosition } from "../services/geolocation";
 import { 
   MapPin, 
-  Clock, 
-  Calendar, 
   CheckCircle2, 
   AlertTriangle, 
-  Compass, 
   LogIn, 
   LogOut, 
   ShieldCheck, 
-  Building,
   RefreshCw,
-  Award,
   Lock,
   History,
-  FileText,
   AlertCircle
 } from "lucide-react";
 
@@ -30,18 +25,21 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
       Math.sin(dLon / 2) *
       Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return parseFloat((R * c).toFixed(2));
+  return R * c;
 }
 
-export default function AttendanceTracker({ setView }) {
+export default function AttendanceTracker() {
   const [todayData, setTodayData] = useState(null);
   const [history, setHistory] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const gpsRequest = useRef(0);
   const [currentCoords, setCurrentCoords] = useState(null);
   const [accuracyM, setAccuracyM] = useState(null);
   const [distanceKm, setDistanceKm] = useState(null);
   const [gpsError, setGpsError] = useState("");
+  const [gpsLoading, setGpsLoading] = useState(false);
   const [actionMsg, setActionMsg] = useState("");
   const [workSummary, setWorkSummary] = useState("");
   const [btnLoading, setBtnLoading] = useState(false);
@@ -54,8 +52,62 @@ export default function AttendanceTracker({ setView }) {
   const [exceptionSubmitting, setExceptionSubmitting] = useState(false);
   const [myExceptions, setMyExceptions] = useState([]);
 
+  const detectGPS = async (data) => {
+    const requestId = ++gpsRequest.current;
+    setGpsLoading(true);
+    setGpsError('');
+    setCurrentCoords(null);
+    setDistanceKm(null);
+    try {
+        const position = await requestFreshPosition();
+        if (requestId !== gpsRequest.current) return null;
+        setCurrentCoords(position);
+        setAccuracyM(position.accuracy);
+        const compLat = data?.company?.latitude ?? data?.company_lat;
+        const compLng = data?.company?.longitude ?? data?.company_lng;
+        if (Number.isFinite(compLat) && Number.isFinite(compLng)) {
+          const d = calculateDistance(position.lat, position.lng, compLat, compLng);
+          setDistanceKm(d);
+        }
+        return position;
+    } catch (error) {
+      if (requestId === gpsRequest.current) setGpsError(error.message);
+      return null;
+    } finally {
+      if (requestId === gpsRequest.current) setGpsLoading(false);
+    }
+  };
+
+  const loadAllData = async () => {
+    try {
+      const [todayRes, histRes, statsRes, excRes] = await Promise.all([
+        api.getTodayAttendance(),
+        api.getAttendanceHistory(null, 15),
+        api.getAttendanceStats(),
+        api.getMyExceptions(),
+      ]);
+      setTodayData(todayRes);
+      setHistory(histRes?.logs || []);
+      setStats(statsRes?.stats || null);
+      setMyExceptions(excRes?.exceptions || []);
+      setLoadError("");
+      if (todayRes?.record?.working_hours && todayRes?.record?.out_time) {
+        setElapsedSeconds(Math.round(todayRes.record.working_hours * 3600));
+      }
+    } catch (err) {
+      setLoadError(err.message || "Attendance could not be loaded. Please retry.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     loadAllData();
+    const refresh = () => { if (document.visibilityState !== 'hidden') loadAllData(); };
+    const timer = setInterval(refresh, 15000);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => { clearInterval(timer); window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
   }, []);
 
   // Run GPS detection only after todayData is available
@@ -63,7 +115,7 @@ export default function AttendanceTracker({ setView }) {
     if (todayData) {
       detectGPS(todayData);
     }
-  }, [todayData]);
+  }, [todayData?.company?.latitude, todayData?.company?.longitude]);
 
   // Real-time elapsed work duration timer
   useEffect(() => {
@@ -71,7 +123,8 @@ export default function AttendanceTracker({ setView }) {
     if (todayRec?.in_time && !todayRec?.out_time) {
       const calcElapsed = () => {
         try {
-          const inDt = new Date(todayRec.in_time.replace(" ", "T"));
+          const rawTime = todayRec.check_in_at;
+          const inDt = new Date(rawTime && !/Z$|[+-]\d{2}:\d{2}$/.test(rawTime) ? `${rawTime}Z` : rawTime);
           const diff = Math.max(0, Math.floor((new Date() - inDt) / 1000));
           setElapsedSeconds(diff);
         } catch {
@@ -81,30 +134,8 @@ export default function AttendanceTracker({ setView }) {
       calcElapsed();
       const interval = setInterval(calcElapsed, 1000);
       return () => clearInterval(interval);
-    } else if (todayRec?.working_hours) {
-      setElapsedSeconds(Math.round(todayRec.working_hours * 3600));
     }
   }, [todayData]);
-
-  const loadAllData = async () => {
-    try {
-      setLoading(true);
-      const [todayRes, histRes, statsRes, excRes] = await Promise.all([
-        api.getTodayAttendance().catch(() => null),
-        api.getAttendanceHistory(null, 15).catch(() => ({ logs: [] })),
-        api.getAttendanceStats().catch(() => ({ stats: null })),
-        api.getMyExceptions().catch(() => ({ exceptions: [] })),
-      ]);
-      setTodayData(todayRes);
-      setHistory(histRes?.logs || []);
-      setStats(statsRes?.stats || null);
-      setMyExceptions(excRes?.exceptions || []);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const loadAuditLogs = async () => {
     try {
@@ -141,34 +172,6 @@ export default function AttendanceTracker({ setView }) {
     }
   };
 
-  const detectGPS = (data) => {
-    if (!navigator.geolocation) {
-      setGpsError("Geolocation is not supported by your browser");
-      return;
-    }
-    setGpsError("");
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const { latitude, longitude, accuracy } = pos.coords;
-        setCurrentCoords({ lat: latitude, lng: longitude });
-        setAccuracyM(accuracy ? Math.round(accuracy) : null);
-
-        // The attendance API returns the registered workplace under `company`.
-        // Keep the flat-field fallback for backward compatibility.
-        const compLat = data?.company?.latitude ?? data?.company_lat;
-        const compLng = data?.company?.longitude ?? data?.company_lng;
-        if (Number.isFinite(compLat) && Number.isFinite(compLng)) {
-          const dist = calculateDistance(latitude, longitude, compLat, compLng);
-          setDistanceKm(dist);
-        }
-      },
-      () => {
-        setGpsError("GPS permission required. Please allow location access in your browser to verify attendance.");
-      },
-      { enableHighAccuracy: true, timeout: 10000 }
-    );
-  };
-
   const handleCheckIn = async () => {
     if (!currentCoords) {
       setActionMsg("❌ GPS location is required to check in. Please allow browser location access.");
@@ -177,10 +180,12 @@ export default function AttendanceTracker({ setView }) {
     setBtnLoading(true);
     setActionMsg("");
     try {
+      const fresh = await detectGPS(todayData);
+      if (!fresh) return;
       const res = await api.checkIn(
-        currentCoords.lat,
-        currentCoords.lng,
-        accuracyM,
+        fresh.lat,
+        fresh.lng,
+        fresh.accuracy,
         navigator.userAgent
       );
       setActionMsg(`✅ ${res.message} (Status: ${res.status})`);
@@ -202,9 +207,9 @@ export default function AttendanceTracker({ setView }) {
       return;
     }
     const elapsedHrs = elapsedSeconds / 3600.0;
-    if (elapsedHrs < 3.0) {
+    if (elapsedHrs < (todayData?.min_work_hours || 3.0)) {
       const proceed = window.confirm(
-        `⚠️ Minimum Duration Warning:\nYou have logged ${elapsedHrs.toFixed(2)} hours today, which is less than the required 3.0 hours for full day attendance.\n\nChecking out now will record your status as "Half Day" or "Incomplete". Are you sure you want to proceed?`
+        `Minimum Duration Warning:\nYou have logged ${elapsedHrs.toFixed(2)} hours today, which is less than the required ${todayData?.min_work_hours || 3.0} hours.\n\nChecking out now may record "Half Day" or "Incomplete". Continue?`
       );
       if (!proceed) return;
     }
@@ -212,10 +217,12 @@ export default function AttendanceTracker({ setView }) {
     setBtnLoading(true);
     setActionMsg("");
     try {
+      const fresh = await detectGPS(todayData);
+      if (!fresh) return;
       const res = await api.checkOut(
-        currentCoords.lat,
-        currentCoords.lng,
-        accuracyM,
+        fresh.lat,
+        fresh.lng,
+        fresh.accuracy,
         workSummary.trim(),
         navigator.userAgent
       );
@@ -236,6 +243,7 @@ export default function AttendanceTracker({ setView }) {
   const companyName = todayData?.company?.name || todayData?.company_name || "Assigned Company";
   const geofenceRadiusKm = (todayData?.company?.geofence_radius_m || 2000) / 1000;
   const isWithinGeofence = distanceKm !== null && distanceKm <= geofenceRadiusKm;
+  const isReliableGPS = Number.isFinite(accuracyM) && accuracyM > 0 && accuracyM <= (todayData?.policy?.max_accuracy_m || 150);
 
   const formatElapsed = (sec) => {
     const h = Math.floor(sec / 3600);
@@ -291,13 +299,18 @@ export default function AttendanceTracker({ setView }) {
           <button
             className="btn btn-secondary"
             onClick={() => { detectGPS(todayData); loadAllData(); }}
+            disabled={gpsLoading}
             style={{ padding: "8px 16px", fontSize: "0.82rem" }}
           >
-            <RefreshCw size={14} /> Refresh GPS
+            <RefreshCw size={14} /> {gpsLoading ? 'Detecting location…' : 'Refresh GPS'}
           </button>
         </div>
       </div>
 
+      {loadError && <div role="alert" className="attendance-load-error">
+        <AlertTriangle size={18} /><span>{loadError}</span>
+        <button className="btn btn-secondary" onClick={loadAllData}>Retry</button>
+      </div>}
       {/* Geofence Status Banner */}
       <div style={{
         background: isWithinGeofence ? "#f0fdf4" : "#fffbeb",
@@ -327,12 +340,12 @@ export default function AttendanceTracker({ setView }) {
           <div>
             <div style={{ fontWeight: 700, fontSize: "0.92rem", color: "var(--text-primary)" }}>
               {currentCoords
-                ? `GPS Live: ${currentCoords.lat.toFixed(4)}, ${currentCoords.lng.toFixed(4)} (Accuracy: ±${accuracyM || 15}m)`
+                ? `GPS: ${currentCoords.lat.toFixed(5)}, ${currentCoords.lng.toFixed(5)} (Accuracy: ±${Math.round(accuracyM)}m)`
                 : gpsError || "Acquiring GPS location..."}
             </div>
             <div style={{ fontSize: "0.8rem", color: "var(--text-dim)", marginTop: 2 }}>
               {distanceKm !== null
-                ? `Distance to Company Workplace: ${distanceKm} km (${isWithinGeofence ? `Within Authorized ${geofenceRadiusKm.toFixed(2)} km Geofence ✓` : "Outside Geofence: Will flag Location Exception"})`
+                ? `Workplace distance: ${Math.round(distanceKm * 1000)} m · Allowed radius: ${Math.round(geofenceRadiusKm * 1000)} m. ${!isReliableGPS ? "GPS accuracy is too low; refresh before checking in." : "A fresh location is verified by the server for each action."}`
                 : "Calculating distance to registered workplace..."}
             </div>
           </div>
@@ -347,12 +360,12 @@ export default function AttendanceTracker({ setView }) {
           border: `1px solid ${isWithinGeofence ? "#86efac" : "#fcd34d"}`,
           color: isWithinGeofence ? "var(--green-primary)" : "#b45309"
         }}>
-          {isWithinGeofence ? "✓ GEOFENCE VERIFIED" : distanceKm !== null ? `⚠️ ${distanceKm}km OUTSIDE GEOFENCE` : "AWAITING GPS"}
+          {gpsLoading ? "LOCATING…" : isWithinGeofence && isReliableGPS ? "WITHIN WORKPLACE RADIUS" : distanceKm !== null ? (isWithinGeofence ? "LOW GPS ACCURACY" : "OUTSIDE WORKPLACE RADIUS") : "AWAITING GPS"}
         </div>
       </div>
 
       {actionMsg && (
-        <div style={{
+        <div role="status" aria-live="polite" style={{
           background: actionMsg.startsWith("✅") ? "var(--success-dim)" : "var(--danger-dim)",
           border: `1px solid ${actionMsg.startsWith("✅") ? "#bbf7d0" : "#fecaca"}`,
           color: actionMsg.startsWith("✅") ? "var(--green-primary)" : "var(--danger)",
@@ -413,10 +426,10 @@ export default function AttendanceTracker({ setView }) {
               <div>
                 <div className="grid-2-col" style={{ gap: 12, fontSize: "0.85rem", color: "var(--text-dim)" }}>
                   <div><strong>Server Timestamp:</strong> <span className="mono">{todayRecord.in_time}</span></div>
-                  <div><strong>GPS Proximity:</strong> {todayRecord.in_distance !== null ? `${todayRecord.in_distance} km` : "N/A"}</div>
+                  <div><strong>GPS Proximity:</strong> {todayRecord.in_distance_m != null ? `${Math.round(todayRecord.in_distance_m)} m` : "Not recorded"}</div>
                 </div>
-                <div style={{ marginTop: 8, fontSize: "0.8rem", color: todayRecord.location_verified ? "var(--green-primary)" : "var(--danger)" }}>
-                  {todayRecord.location_verified ? "✓ Location verified within approved workplace." : "⚠️ Recorded with location exception."}
+                <div style={{ marginTop: 8, fontSize: "0.8rem", color: todayRecord.verification_state === "verified" ? "var(--green-primary)" : "var(--danger)" }}>
+                  {todayRecord.verification_state === "verified" ? "Location verification completed." : "Verification pending; review attendance status."}
                 </div>
               </div>
             ) : (
@@ -649,14 +662,14 @@ export default function AttendanceTracker({ setView }) {
                   const isPending = log.status?.includes("Pending");
                   return (
                     <tr key={log.id}>
-                      <td className="mono" style={{ fontWeight: 600 }}>{log.attendance_date}</td>
+                      <td className="mono" style={{ fontWeight: 600 }}>{log.date}</td>
                       <td className="mono">{log.in_time ? log.in_time.substring(11, 16) : "--:--"}</td>
                       <td className="mono">{log.out_time ? log.out_time.substring(11, 16) : "--:--"}</td>
                       <td style={{ fontWeight: 700, color: "var(--green-primary)" }}>
                         {log.working_hours ? `${log.working_hours}h` : "—"}
                       </td>
                       <td style={{ fontSize: "0.82rem", color: "var(--text-dim)" }}>
-                        {log.in_distance !== null ? `${log.in_distance}km` : "—"}
+                        {log.in_distance_m != null ? `${Math.round(log.in_distance_m)} m` : "—"}
                       </td>
                       <td>
                         <span className={`badge ${
@@ -668,7 +681,7 @@ export default function AttendanceTracker({ setView }) {
                         </span>
                       </td>
                       <td>
-                        {log.location_verified ? (
+                        {log.verification_state === "verified" ? (
                           <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: "0.76rem", color: "var(--green-primary)", fontWeight: 600 }}>
                             <ShieldCheck size={13} /> Verified
                           </span>

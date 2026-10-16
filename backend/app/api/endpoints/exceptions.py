@@ -125,8 +125,8 @@ def review_exception(
         record = db.get(Attendance, exc.attendance_id)
         if record:
             record.verification_state = "verified"
-            record.status = "Present"
-            record.verification_flags = "[]"
+            record.status = "Present / Verified"
+            record.verification_flags = None
 
     if student:
         notify_student(db, student.id,
@@ -162,7 +162,7 @@ def low_attendance_watchlist(
         total = len(records)
         if total == 0:
             continue
-        present = sum(1 for r in records if r.status in ("Present", "Corrected"))
+        present = sum(1 for r in records if r.status in ("Present / Verified", "Present", "Corrected"))
         pct = round(present / total * 100.0, 1)
         if pct < threshold:
             watch.append({

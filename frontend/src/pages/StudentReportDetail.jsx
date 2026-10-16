@@ -9,9 +9,7 @@ import {
   Building2, 
   ShieldCheck, 
   Clock, 
-  TrendingUp,
-  MapPin,
-  Award
+  MapPin
 } from "lucide-react";
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, LineElement, PointElement } from "chart.js";
 import { Doughnut, Bar } from "react-chartjs-2";
@@ -24,23 +22,30 @@ export default function StudentReportDetail({ studentId, setView }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (studentId) {
-      loadReport(studentId);
-    }
+    if (!studentId) return;
+    let ignore = false;
+    const fetchReport = async () => {
+      try {
+        const res = await api.getStudentDetail(studentId);
+        if (!ignore) {
+          setData(res.data);
+          setError("");
+        }
+      } catch (err) {
+        if (!ignore) {
+          setError(err.message || "Failed to load student report.");
+        }
+      } finally {
+        if (!ignore) {
+          setLoading(false);
+        }
+      }
+    };
+    fetchReport();
+    return () => {
+      ignore = true;
+    };
   }, [studentId]);
-
-  const loadReport = async (id) => {
-    try {
-      setLoading(true);
-      setError("");
-      const res = await api.getStudentDetail(id);
-      setData(res.data);
-    } catch (err) {
-      setError(err.message || "Failed to load student report.");
-    } finally {
-      setLoading(false);
-    }
-  };
 
   if (loading) {
     return (

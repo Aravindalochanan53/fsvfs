@@ -1,5 +1,5 @@
 import React from "react";
-import { Award, CheckCircle2, Building, ShieldCheck, MapPin, Mail, Phone, Globe } from "lucide-react";
+import { Award, Building, ShieldCheck, MapPin, Mail, Phone, Globe } from "lucide-react";
 
 export default function AboutPage() {
   return (

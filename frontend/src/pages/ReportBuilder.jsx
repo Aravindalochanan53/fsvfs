@@ -2,15 +2,9 @@ import React, { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../services/api";
 import { 
-  FileText, 
   ArrowLeft, 
-  ArrowRight, 
   CheckCircle2, 
-  Sparkles, 
-  Building2, 
   Printer, 
-  Plus, 
-  X,
   Send,
   Save,
   Lock,
@@ -19,13 +13,7 @@ import {
   Eye,
   Edit3,
   AlertTriangle,
-  Award,
-  Calendar,
-  Layers,
-  Code,
-  ShieldCheck,
-  Check,
-  BookOpen
+  ShieldCheck
 } from "lucide-react";
 
 const SECTION_GROUPS = [
@@ -90,13 +78,8 @@ export default function ReportBuilder({ setView }) {
   const [versions, setVersions] = useState([]);
   const [comments, setComments] = useState([]);
 
-  useEffect(() => {
-    loadReportData();
-  }, []);
-
   const loadReportData = async () => {
     try {
-      setLoading(true);
       const res = await api.getMyReport();
       setReport(res);
       setSections(res.sections_data || {});
@@ -116,6 +99,10 @@ export default function ReportBuilder({ setView }) {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    loadReportData();
+  }, []);
 
   const isSectionComplete = (key) => {
     const val = sections[key];

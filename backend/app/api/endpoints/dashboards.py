@@ -35,7 +35,7 @@ def student_dashboard(payload: dict = Depends(require_auth), db: Session = Depen
     today = _today_ist()
     records = db.query(Attendance).filter(Attendance.student_id == student.id).all()
     total = len(records)
-    present = sum(1 for r in records if r.status in ("Present", "Corrected"))
+    present = sum(1 for r in records if r.status in ("Present", "Corrected", "Present / Verified"))
     pending = sum(1 for r in records if r.status == "Pending Verification")
     hours = round(sum((r.working_hours or 0.0) for r in records), 1)
     pct = round(present / total * 100.0, 1) if total else 0.0
@@ -54,7 +54,7 @@ def student_dashboard(payload: dict = Depends(require_auth), db: Session = Depen
 
     unread = db.query(Notification).filter(
         Notification.student_id == student.id,
-        Notification.is_read.is_(False),
+        Notification.is_read == False,  # noqa: E712 — compatible with SQL Server BIT
     ).order_by(Notification.created_at.desc()).limit(10).all()
 
     doc_types = {d.doc_type for d in today_doc}
@@ -124,7 +124,7 @@ def faculty_dashboard(payload: dict = Depends(require_auth), db: Session = Depen
         Attendance.attendance_date == today,
     ).all() if student_ids else []
 
-    present_today = sum(1 for r in today_rows if r.status in ("Present", "Corrected"))
+    present_today = sum(1 for r in today_rows if r.status in ("Present", "Corrected", "Present / Verified"))
     pending_today = sum(1 for r in today_rows if r.status == "Pending Verification")
     absent_today = len(students) - len(today_rows)
 
@@ -138,7 +138,7 @@ def faculty_dashboard(payload: dict = Depends(require_auth), db: Session = Depen
         recs = by_student.get(s.id, [])
         if not recs:
             continue
-        pres = sum(1 for r in recs if r.status in ("Present", "Corrected"))
+        pres = sum(1 for r in recs if r.status in ("Present", "Corrected", "Present / Verified"))
         pct = round(pres / len(recs) * 100.0, 1)
         if pct < 75.0:
             watchlist.append({
@@ -154,7 +154,7 @@ def faculty_dashboard(payload: dict = Depends(require_auth), db: Session = Depen
         key = r.attendance_date.strftime("%Y-%m")
         b = monthly.setdefault(key, {"total": 0, "present": 0})
         b["total"] += 1
-        if r.status in ("Present", "Corrected"):
+        if r.status in ("Present", "Corrected", "Present / Verified"):
             b["present"] += 1
     trend = []
     for key in sorted(monthly)[-6:]:
@@ -196,7 +196,7 @@ def faculty_dashboard(payload: dict = Depends(require_auth), db: Session = Depen
         for s in students:
             recs = by_student.get(s.id, [])
             if recs:
-                pres = sum(1 for r in recs if r.status in ("Present", "Corrected"))
+                pres = sum(1 for r in recs if r.status in ("Present", "Corrected", "Present / Verified"))
                 pcts.append(pres / len(recs) * 100.0)
         avg_pct = round(sum(pcts) / len(pcts), 1) if pcts else 0.0
 
@@ -249,7 +249,7 @@ def admin_dashboard(payload: dict = Depends(require_auth), db: Session = Depends
         if ids:
             recs = db.query(Attendance).filter(Attendance.student_id.in_(ids)).all()
             if recs:
-                pres = sum(1 for r in recs if r.status in ("Present", "Corrected"))
+                pres = sum(1 for r in recs if r.status in ("Present", "Corrected", "Present / Verified"))
                 pct = round(pres / len(recs) * 100.0, 1)
         department_breakdown.append({"department": code, "students": count, "avg_attendance_pct": pct})
 
@@ -259,7 +259,7 @@ def admin_dashboard(payload: dict = Depends(require_auth), db: Session = Depends
         recs = db.query(Attendance).filter(Attendance.student_id == s.id).all()
         if not recs:
             continue
-        pres = sum(1 for r in recs if r.status in ("Present", "Corrected"))
+        pres = sum(1 for r in recs if r.status in ("Present", "Corrected", "Present / Verified"))
         pct = round(pres / len(recs) * 100.0, 1)
         if pct < 60.0:
             risk.append({"roll_number": s.roll_number, "student_name": s.student_name,

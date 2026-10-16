@@ -1,21 +1,20 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../services/api";
 import { 
-  BarChart3, 
   Search, 
   Users,
   FileText, 
   CheckCircle2, 
-  Clock, 
-  AlertCircle, 
-  X, 
   Filter, 
   Download, 
-  Building2,
   Calendar,
-  Image as ImageIcon,
-  Lock
+  Lock,
+  ArrowUpDown,
+  ChevronUp,
+  ChevronDown,
+  RefreshCw,
+  AlertCircle
 } from "lucide-react";
 
 export default function ConsolidateDashboard({ setView }) {
@@ -26,42 +25,135 @@ export default function ConsolidateDashboard({ setView }) {
   const [data, setData] = useState(null);
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState(isFaculty ? facultyDept : "ALL");
+  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [sortField, setSortField] = useState("reg_no");
+  const [sortDir, setSortDir] = useState("asc");
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  useEffect(() => {
-    if (!isFaculty) {
-      setView("student-home");
-      return;
-    }
-    loadSummary();
-  }, [isFaculty, setView]);
-
-  if (!isFaculty) return null;
-
-  const loadSummary = async () => {
+  const loadSummary = useCallback(async () => {
     try {
-      setLoading(true);
       const res = await api.getConsolidateSummary();
       setData(res);
+      setError(null);
     } catch (err) {
-      console.error(err);
+      console.error("Failed to load consolidate summary:", err);
+      setError(err.message || "Failed to retrieve consolidated records. Please check backend service.");
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  const handleRefresh = async () => {
+    setLoading(true);
+    await loadSummary();
   };
 
+  useEffect(() => {
+    let ignore = false;
+    const fetchSummary = async () => {
+      try {
+        const res = await api.getConsolidateSummary();
+        if (!ignore) {
+          setData(res);
+          setError(null);
+        }
+      } catch (err) {
+        if (!ignore) {
+          console.error("Failed to load consolidate summary:", err);
+          setError(err.message || "Failed to retrieve consolidated records. Please check backend service.");
+        }
+      } finally {
+        if (!ignore) {
+          setLoading(false);
+        }
+      }
+    };
+    fetchSummary();
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  if (!isFaculty) return null;
+
+  const handleSort = (field) => {
+    if (sortField === field) {
+      setSortDir((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortField(field);
+      setSortDir("asc");
+    }
+  };
 
   const records = data?.records || [];
   const filtered = records.filter((r) => {
     const matchesSearch =
-      r.name.toLowerCase().includes(search.toLowerCase()) ||
-      r.reg_no.toLowerCase().includes(search.toLowerCase()) ||
-      r.company.toLowerCase().includes(search.toLowerCase());
+      (r.name || "").toLowerCase().includes(search.toLowerCase()) ||
+      (r.reg_no || "").toLowerCase().includes(search.toLowerCase()) ||
+      (r.company || "").toLowerCase().includes(search.toLowerCase());
     const matchesDept = isFaculty ? r.department === facultyDept : (deptFilter === "ALL" || r.department === deptFilter);
-    return matchesSearch && matchesDept;
+    const matchesStatus = statusFilter === "ALL" || r.status === statusFilter;
+    return matchesSearch && matchesDept && matchesStatus;
+  });
+
+  const sorted = [...filtered].sort((a, b) => {
+    let valA, valB;
+    if (sortField === "attendance_pct") {
+      valA = a.attendance_pct ?? a.attendance_rate ?? 0;
+      valB = b.attendance_pct ?? b.attendance_rate ?? 0;
+    } else if (sortField === "name") {
+      valA = (a.name || "").toLowerCase();
+      valB = (b.name || "").toLowerCase();
+    } else if (sortField === "company") {
+      valA = (a.company || "").toLowerCase();
+      valB = (b.company || "").toLowerCase();
+    } else if (sortField === "status") {
+      valA = (a.status || "").toLowerCase();
+      valB = (b.status || "").toLowerCase();
+    } else {
+      valA = (a.reg_no || "").toLowerCase();
+      valB = (b.reg_no || "").toLowerCase();
+    }
+    if (valA < valB) return sortDir === "asc" ? -1 : 1;
+    if (valA > valB) return sortDir === "asc" ? 1 : -1;
+    return 0;
   });
 
   const departments = isFaculty ? [facultyDept] : ["ALL", ...new Set(records.map((r) => r.department))];
+
+  const exportToCSV = () => {
+    if (!sorted.length) return;
+    const headers = ["S.No", "Student Name", "Roll Number", "Department", "Company", "Duration", "Attendance %", "Status", "Certificate Uploaded"];
+    const rows = sorted.map((r, idx) => [
+      idx + 1,
+      `"${(r.name || "").replace(/"/g, '""')}"`,
+      `"${(r.reg_no || "").replace(/"/g, '""')}"`,
+      `"${(r.department || "").replace(/"/g, '""')}"`,
+      `"${(r.company || "").replace(/"/g, '""')}"`,
+      `"${(r.duration || "").replace(/"/g, '""')}"`,
+      r.attendance_pct ?? r.attendance_rate ?? 0,
+      `"${(r.status || "").replace(/"/g, '""')}"`,
+      r.document_uploaded ? "Yes" : "No"
+    ]);
+    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `kongu_${facultyDept}_internship_summary_${new Date().toISOString().split("T")[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const renderSortIcon = (field) => {
+    if (sortField !== field) {
+      return <ArrowUpDown size={13} style={{ opacity: 0.4, marginLeft: 4 }} />;
+    }
+    return sortDir === "asc"
+      ? <ChevronUp size={14} style={{ color: "var(--green-primary)", marginLeft: 4 }} />
+      : <ChevronDown size={14} style={{ color: "var(--green-primary)", marginLeft: 4 }} />;
+  };
 
   return (
     <div className="app-container" style={{ padding: "30px 20px 60px" }}>
@@ -110,15 +202,68 @@ export default function ConsolidateDashboard({ setView }) {
           marginBottom: 24,
           display: "flex",
           alignItems: "center",
+          justifyContent: "space-between",
           gap: 10,
           color: "var(--green-primary)",
           fontSize: "0.85rem",
-          fontWeight: 600
+          fontWeight: 600,
+          flexWrap: "wrap"
         }}>
-          <Lock size={16} />
-          <span>
-            <strong>Department Isolation Active:</strong> Displaying consolidated registry and analytics for <strong>Department of {facultyDept}</strong>.
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <Lock size={16} />
+            <span>
+              <strong>Department Isolation Active:</strong> Displaying consolidated registry and analytics for <strong>Department of {facultyDept}</strong>.
+            </span>
+          </div>
+          <button
+            onClick={handleRefresh}
+            disabled={loading}
+            aria-label="Refresh consolidated records"
+            style={{
+              background: "transparent",
+              border: "1px solid #86efac",
+              color: "var(--green-primary)",
+              borderRadius: "var(--radius-sm)",
+              padding: "4px 10px",
+              fontSize: "0.78rem",
+              fontWeight: 700,
+              cursor: "pointer",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6
+            }}
+          >
+            <RefreshCw size={13} className={loading ? "spin" : ""} /> Refresh Data
+          </button>
+        </div>
+      )}
+
+      {/* Error Banner */}
+      {error && (
+        <div style={{
+          background: "var(--danger-dim)",
+          border: "1.5px solid #fecaca",
+          color: "var(--danger)",
+          padding: "14px 18px",
+          borderRadius: "var(--radius-md)",
+          marginBottom: 24,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+          fontSize: "0.86rem"
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <AlertCircle size={18} />
+            <span>{error}</span>
+          </div>
+          <button
+            onClick={handleRefresh}
+            className="btn btn-primary"
+            style={{ padding: "6px 14px", fontSize: "0.8rem" }}
+          >
+            Try Again
+          </button>
         </div>
       )}
 
@@ -132,7 +277,7 @@ export default function ConsolidateDashboard({ setView }) {
             {isFaculty ? `${facultyDept} Students` : "Total Students"}
           </span>
           <div style={{ fontSize: "2.2rem", fontWeight: 800, color: "var(--green-primary)", marginTop: 4 }}>
-            {data?.metrics?.total_students || 0}
+            {loading ? "..." : (data?.metrics?.total_students || 0)}
           </div>
           <span style={{ fontSize: "0.78rem", color: "var(--text-dim)" }}>Enrolled in Internships</span>
         </div>
@@ -142,7 +287,7 @@ export default function ConsolidateDashboard({ setView }) {
             Completed
           </span>
           <div style={{ fontSize: "2.2rem", fontWeight: 800, color: "var(--info)", marginTop: 4 }}>
-            {data?.metrics?.completed || 0}
+            {loading ? "..." : (data?.metrics?.completed || 0)}
           </div>
           <span style={{ fontSize: "0.78rem", color: "var(--text-dim)" }}>Verified with Documents</span>
         </div>
@@ -152,7 +297,7 @@ export default function ConsolidateDashboard({ setView }) {
             Ongoing
           </span>
           <div style={{ fontSize: "2.2rem", fontWeight: 800, color: "var(--warning)", marginTop: 4 }}>
-            {data?.metrics?.ongoing || 0}
+            {loading ? "..." : (data?.metrics?.ongoing || 0)}
           </div>
           <span style={{ fontSize: "0.78rem", color: "var(--text-dim)" }}>In-Progress Tracking</span>
         </div>
@@ -162,7 +307,7 @@ export default function ConsolidateDashboard({ setView }) {
             Average Attendance
           </span>
           <div style={{ fontSize: "2.2rem", fontWeight: 800, color: "var(--green-primary)", marginTop: 4 }}>
-            {data?.metrics?.avg_attendance != null ? `${data.metrics.avg_attendance}%` : loading ? "…" : "0%"}
+            {loading ? "..." : (data?.metrics?.avg_attendance != null ? `${data.metrics.avg_attendance}%` : "0%")}
           </div>
           <span style={{ fontSize: "0.78rem", color: "var(--text-dim)" }}>Attendance Health Ratio</span>
         </div>
@@ -243,7 +388,7 @@ export default function ConsolidateDashboard({ setView }) {
         </div>
       </div>
 
-      {/* Search & Filter Toolbar */}
+      {/* Search, Filter & Export Toolbar */}
       <div className="card" style={{ padding: "18px 24px", marginBottom: 20 }}>
         <div style={{
           display: "flex",
@@ -258,39 +403,77 @@ export default function ConsolidateDashboard({ setView }) {
               style={{ paddingLeft: 38 }}
               placeholder="Search by student name, roll number, or company..."
               value={search}
+              aria-label="Search students"
               onChange={(e) => setSearch(e.target.value)}
             />
             <Search size={16} color="var(--green-primary)" style={{ position: "absolute", left: 14, top: 13 }} />
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: "0.82rem", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4, fontWeight: 600 }}>
-              <Filter size={14} /> Dept:
-            </span>
-            <select
-              className="form-select"
-              style={{ width: "auto", padding: "8px 14px", fontSize: "0.84rem" }}
-              value={deptFilter}
-              disabled={isFaculty}
-              onChange={(e) => setDeptFilter(e.target.value)}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: "0.82rem", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4, fontWeight: 600 }}>
+                <Filter size={14} /> Dept:
+              </span>
+              <select
+                className="form-select"
+                style={{ width: "auto", padding: "8px 12px", fontSize: "0.84rem" }}
+                value={deptFilter}
+                disabled={isFaculty}
+                aria-label="Filter by department"
+                onChange={(e) => setDeptFilter(e.target.value)}
+              >
+                {departments.map((d) => (
+                  <option key={d} value={d}>
+                    {d === "ALL" ? "All Departments" : d}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: "0.82rem", color: "var(--text-muted)", fontWeight: 600 }}>
+                Status:
+              </span>
+              <select
+                className="form-select"
+                style={{ width: "auto", padding: "8px 12px", fontSize: "0.84rem" }}
+                value={statusFilter}
+                aria-label="Filter by internship status"
+                onChange={(e) => setStatusFilter(e.target.value)}
+              >
+                <option value="ALL">All Statuses</option>
+                <option value="Completed">Completed</option>
+                <option value="Ongoing">Ongoing</option>
+              </select>
+            </div>
+
+            <button
+              onClick={exportToCSV}
+              disabled={sorted.length === 0}
+              className="btn btn-secondary"
+              title="Export current table to CSV"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "8px 14px",
+                fontSize: "0.82rem",
+                fontWeight: 600
+              }}
             >
-              {departments.map((d) => (
-                <option key={d} value={d}>
-                  {d === "ALL" ? "All Departments" : d}
-                </option>
-              ))}
-            </select>
+              <Download size={14} /> Export CSV
+            </button>
           </div>
         </div>
       </div>
 
       {/* Consolidated Records Table */}
       <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-        <div style={{ padding: "18px 24px", borderBottom: "1.5px solid var(--border-subtle)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ padding: "18px 24px", borderBottom: "1.5px solid var(--border-subtle)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
           <div>
             <h3 style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)" }}>Student Internship Registry</h3>
             <p style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
-              Showing {filtered.length} of {records.length} records
+              Showing {sorted.length} of {records.length} records • Click column headers to sort
             </p>
           </div>
         </div>
@@ -299,20 +482,49 @@ export default function ConsolidateDashboard({ setView }) {
           <table className="custom-table">
             <thead>
               <tr>
-                <th>S.No</th>
-                <th>Student Name</th>
-                <th>Roll Number</th>
-                <th>Dept</th>
-                <th>Company</th>
-                <th>Duration</th>
-                <th>Attendance %</th>
-                <th>Status</th>
-                <th>Certificate</th>
+                <th scope="col" style={{ width: 60 }}>S.No</th>
+                <th scope="col" onClick={() => handleSort("name")} style={{ cursor: "pointer", userSelect: "none" }}>
+                  <span style={{ display: "inline-flex", alignItems: "center" }}>
+                    Student Name {renderSortIcon("name")}
+                  </span>
+                </th>
+                <th scope="col" onClick={() => handleSort("reg_no")} style={{ cursor: "pointer", userSelect: "none" }}>
+                  <span style={{ display: "inline-flex", alignItems: "center" }}>
+                    Roll Number {renderSortIcon("reg_no")}
+                  </span>
+                </th>
+                <th scope="col">Dept</th>
+                <th scope="col" onClick={() => handleSort("company")} style={{ cursor: "pointer", userSelect: "none" }}>
+                  <span style={{ display: "inline-flex", alignItems: "center" }}>
+                    Company {renderSortIcon("company")}
+                  </span>
+                </th>
+                <th scope="col">Duration</th>
+                <th scope="col" onClick={() => handleSort("attendance_pct")} style={{ cursor: "pointer", userSelect: "none" }}>
+                  <span style={{ display: "inline-flex", alignItems: "center" }}>
+                    Attendance % {renderSortIcon("attendance_pct")}
+                  </span>
+                </th>
+                <th scope="col" onClick={() => handleSort("status")} style={{ cursor: "pointer", userSelect: "none" }}>
+                  <span style={{ display: "inline-flex", alignItems: "center" }}>
+                    Status {renderSortIcon("status")}
+                  </span>
+                </th>
+                <th scope="col">Certificate</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.length > 0 ? (
-                filtered.map((r, idx) => (
+              {loading ? (
+                <tr>
+                  <td colSpan="9" style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+                      <RefreshCw size={18} className="spin" color="var(--green-primary)" />
+                      <span>Loading consolidated student registry...</span>
+                    </div>
+                  </td>
+                </tr>
+              ) : sorted.length > 0 ? (
+                sorted.map((r, idx) => (
                   <tr key={r.id || idx}>
                     <td style={{ color: "var(--text-muted)" }}>{idx + 1}</td>
                     <td style={{ fontWeight: 700, color: "var(--text-primary)" }}>{r.name}</td>
@@ -325,12 +537,17 @@ export default function ConsolidateDashboard({ setView }) {
                     <td style={{ fontWeight: 600 }}>{r.company}</td>
                     <td style={{ color: "var(--text-dim)", fontSize: "0.84rem" }}>{r.duration}</td>
                     <td>
-                      <span style={{
-                        fontWeight: 700,
-                        color: r.attendance_pct >= 85 ? "var(--green-primary)" : r.attendance_pct >= 75 ? "var(--warning)" : "var(--danger)"
-                      }}>
-                        {r.attendance_pct}%
-                      </span>
+                      {(() => {
+                        const pct = r.attendance_pct ?? r.attendance_rate ?? 0;
+                        return (
+                          <span style={{
+                            fontWeight: 700,
+                            color: pct >= 85 ? "var(--green-primary)" : pct >= 75 ? "var(--warning)" : "var(--danger)"
+                          }}>
+                            {pct}%
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td>
                       <span className={`badge ${
@@ -353,7 +570,7 @@ export default function ConsolidateDashboard({ setView }) {
               ) : (
                 <tr>
                   <td colSpan="9" style={{ textAlign: "center", padding: "36px", color: "var(--text-muted)" }}>
-                    No matching records found.
+                    No matching student records found. {search || statusFilter !== "ALL" ? "Try clearing search or filters." : ""}
                   </td>
                 </tr>
               )}

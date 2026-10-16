@@ -4,13 +4,9 @@ import { api } from "../services/api";
 import { 
   MapPin, 
   FileText, 
-  BarChart3, 
   ArrowRight, 
   CheckCircle2, 
-  ShieldCheck, 
-  Zap, 
   Sparkles, 
-  Building2,
   ChevronLeft,
   ChevronRight,
   TrendingUp,
@@ -22,23 +18,23 @@ import {
 const SLIDES = [
   {
     image: "https://images.unsplash.com/photo-1522202176988-66273c2fd55f?w=1200&q=80",
-    title: "🎓 Launch Your Engineering Career",
+    title: "Make experience your advantage.",
     subtitle: "Connect with leading industry partners through the KEC Internship Portal",
   },
   {
     image: "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=1200&q=80",
-    title: "⚙️ Industry-Ready Training",
+    title: "Learn by building.",
     subtitle: "Hands-on experience in production environments and engineering labs",
   },
   {
     image: "https://images.unsplash.com/photo-1531482615713-2afd69097998?w=1200&q=80",
-    title: "🏛️ Kongu Engineering College",
+    title: "Rooted in learning. Ready for industry.",
     subtitle: "Perundurai, Erode — autonomous centre of academic excellence",
   },
   {
     image: "https://images.unsplash.com/photo-1552664730-d307ca884978?w=1200&q=80",
-    title: "📊 Geofenced Smart Attendance",
-    subtitle: "Automated GPS attendance tracking, 7-chapter documentation & audit metrics",
+    title: "Every day is a step forward.",
+    subtitle: "Your workplace attendance, training progress and internship documentation in one workspace",
   },
 ];
 
@@ -48,6 +44,22 @@ export default function StudentHome({ setView }) {
   const [attendanceStats, setAttendanceStats] = useState(null);
   const [reportData, setReportData] = useState(null);
   const [statsLoading, setStatsLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    const refreshReview = async () => {
+      if (document.visibilityState === 'hidden') return;
+      try {
+        const [latest, attendance] = await Promise.all([api.getMyReport(), api.getAttendanceStats()]);
+        if (active) { setReportData(latest); setAttendanceStats(attendance.stats); }
+      }
+      catch (err) { console.error('Unable to refresh report review status', err); }
+    };
+    const timer = setInterval(refreshReview, 15000);
+    window.addEventListener('focus', refreshReview);
+    document.addEventListener('visibilitychange', refreshReview);
+    return () => { active = false; clearInterval(timer); window.removeEventListener('focus', refreshReview); document.removeEventListener('visibilitychange', refreshReview); };
+  }, []);
 
   useEffect(() => {
     Promise.all([
@@ -72,9 +84,9 @@ export default function StudentHome({ setView }) {
   const prevSlide = () => setActiveSlide((prev) => (prev - 1 + SLIDES.length) % SLIDES.length);
 
   return (
-    <div className="app-container" style={{ paddingBottom: 60 }}>
+    <div className="app-container student-overview" style={{ paddingBottom: 60 }}>
       {/* Welcome Banner */}
-      <div style={{
+      <div className="overview-welcome" style={{
         marginTop: 28,
         background: "linear-gradient(135deg, #ffffff, #f0fdf4)",
         border: "1.5px solid #bbf7d0",
@@ -101,7 +113,7 @@ export default function StudentHome({ setView }) {
             marginBottom: 8,
             border: "1px solid #bbf7d0"
           }}>
-            <Sparkles size={13} /> Active Student Session
+            <Sparkles size={13} /> YOUR INTERNSHIP JOURNEY
           </div>
           <h2 style={{ fontSize: "1.65rem", fontWeight: 800, color: "var(--text-primary)" }}>
             Welcome back, {user?.student_name || "Student"}!
@@ -125,7 +137,7 @@ export default function StudentHome({ setView }) {
       </div>
 
       {/* Carousel Section */}
-      <div style={{
+      <div className="overview-feature" style={{
         marginTop: 24,
         borderRadius: "var(--radius-xl)",
         overflow: "hidden",
@@ -185,6 +197,7 @@ export default function StudentHome({ setView }) {
 
         {/* Carousel Controls */}
         <button
+          aria-label="Previous highlight"
           onClick={prevSlide}
           style={{
             position: "absolute",
@@ -208,6 +221,7 @@ export default function StudentHome({ setView }) {
           <ChevronLeft size={20} />
         </button>
         <button
+          aria-label="Next highlight"
           onClick={nextSlide}
           style={{
             position: "absolute",

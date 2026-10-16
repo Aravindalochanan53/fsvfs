@@ -5,16 +5,15 @@ import {
   Building2, 
   Users, 
   Briefcase, 
-  GraduationCap, 
   ChevronRight, 
   Search,
   Lock,
-  ShieldCheck
+  RefreshCw
 } from "lucide-react";
 
 export default function DepartmentExplorer({ setView, onSelectStudent }) {
   const { user, role } = useAuth();
-  const isFaculty = role === "faculty";
+  const isFaculty = ["faculty", "hod"].includes(role);
   const facultyDept = user?.department || "CSE";
 
   const [departments, setDepartments] = useState([]);
@@ -24,58 +23,68 @@ export default function DepartmentExplorer({ setView, onSelectStudent }) {
   const [rosterLoading, setRosterLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [listError, setListError] = useState("");
 
   useEffect(() => {
-    loadDepartments();
-  }, []);
-
-  useEffect(() => {
-    // If faculty, strictly keep selected department on their department
-    if (isFaculty && facultyDept) {
-      setSelectedDept(facultyDept);
-    }
-  }, [isFaculty, facultyDept]);
-
-  useEffect(() => {
-    if (selectedDept) {
-      loadRoster(selectedDept);
-    }
-  }, [selectedDept]);
-
-  const loadDepartments = async () => {
-    try {
+    let ignore = false;
+    const fetchDeptList = async () => {
       setLoading(true);
-      const res = await api.getDepartments();
-      setDepartments(res.departments || []);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
+      try {
+        const res = await api.getDepartments();
+        if (!ignore) {
+          setDepartments(res.departments || []);
+          setListError("");
+        }
+      } catch (err) {
+        if (!ignore) setListError(err.message || "Department counts could not load.");
+      } finally {
+        if (!ignore) setLoading(false);
+      }
+    };
+    fetchDeptList();
+    return () => {
+      ignore = true;
+    };
+  }, [refreshKey]);
 
-  const loadRoster = async (code) => {
-    try {
+  useEffect(() => {
+    if (!selectedDept) return;
+    let ignore = false;
+    const fetchRoster = async () => {
       setRosterLoading(true);
-      setErrorMsg("");
-      const res = await api.getDepartmentRoster(code);
-      setRosterData(res);
-    } catch (err) {
-      setErrorMsg(err.message || "Failed to load department roster.");
       setRosterData(null);
-    } finally {
-      setRosterLoading(false);
-    }
-  };
+      setErrorMsg("");
+      setSearch("");
+      try {
+        const res = await api.getDepartmentRoster(selectedDept);
+        if (!ignore) {
+          setRosterData(res);
+          setErrorMsg("");
+        }
+      } catch (err) {
+        if (!ignore) {
+          setErrorMsg(err.message || "Failed to load department roster.");
+          setRosterData(null);
+        }
+      } finally {
+        if (!ignore) setRosterLoading(false);
+      }
+    };
+    fetchRoster();
+    return () => {
+      ignore = true;
+    };
+  }, [selectedDept, refreshKey]);
 
   const currentDeptInfo = rosterData?.department;
   const students = rosterData?.students || [];
 
   const filteredStudents = students.filter(
     (s) =>
-      s.student_name.toLowerCase().includes(search.toLowerCase()) ||
-      s.roll_number.toLowerCase().includes(search.toLowerCase()) ||
-      s.company_name.toLowerCase().includes(search.toLowerCase())
+      (s.student_name || "").toLowerCase().includes(search.toLowerCase()) ||
+      (s.roll_number || "").toLowerCase().includes(search.toLowerCase()) ||
+      (s.company_name || "").toLowerCase().includes(search.toLowerCase())
   );
 
   return (
@@ -138,52 +147,59 @@ export default function DepartmentExplorer({ setView, onSelectStudent }) {
         marginBottom: 24,
         scrollbarWidth: "none"
       }}>
-        {departments.map((d) => {
-          const isSelected = selectedDept === d.code;
-          const isDisabled = isFaculty && d.code !== facultyDept;
+        {loading ? (
+          <div style={{ padding: "10px", color: "var(--text-muted)", fontSize: "0.85rem" }}>
+            Loading department programmes...
+          </div>
+        ) : (
+          departments.map((d) => {
+            const isSelected = selectedDept === d.code;
+            const isDisabled = isFaculty && d.code !== facultyDept;
 
-          return (
-            <button
-              key={d.code}
-              disabled={isDisabled}
-              onClick={() => setSelectedDept(d.code)}
-              style={{
-                background: isSelected ? "var(--green-primary)" : "#ffffff",
-                border: `1.5px solid ${isSelected ? "var(--green-primary)" : "var(--border-subtle)"}`,
-                color: isSelected ? "#ffffff" : isDisabled ? "#94a3b8" : "var(--text-primary)",
-                padding: "9px 18px",
-                borderRadius: "var(--radius-full)",
-                fontSize: "0.84rem",
-                fontWeight: 700,
-                cursor: isDisabled ? "not-allowed" : "pointer",
-                whiteSpace: "nowrap",
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                transition: "all 0.2s",
-                boxShadow: isSelected ? "0 4px 14px rgba(21, 128, 61, 0.25)" : "var(--shadow-sm)",
-                opacity: isDisabled ? 0.45 : 1
-              }}
-              title={isDisabled ? `Restricted: You are in Department ${facultyDept}` : d.name}
-            >
-              <span>{d.code}</span>
-              <span style={{
-                background: isSelected ? "rgba(255,255,255,0.25)" : "#f1f5f9",
-                fontSize: "0.72rem",
-                padding: "2px 7px",
-                borderRadius: 10,
-                color: isSelected ? "#ffffff" : "var(--green-primary)",
-                fontWeight: 700
-              }}>
-                {d.total_students}
-              </span>
-            </button>
-          );
-        })}
+            return (
+              <button
+                key={d.code}
+                disabled={isDisabled}
+                onClick={() => setSelectedDept(d.code)}
+                aria-label={`Select department ${d.name}`}
+                style={{
+                  background: isSelected ? "var(--green-primary)" : "#ffffff",
+                  border: `1.5px solid ${isSelected ? "var(--green-primary)" : "var(--border-subtle)"}`,
+                  color: isSelected ? "#ffffff" : isDisabled ? "#94a3b8" : "var(--text-primary)",
+                  padding: "9px 18px",
+                  borderRadius: "var(--radius-full)",
+                  fontSize: "0.84rem",
+                  fontWeight: 700,
+                  cursor: isDisabled ? "not-allowed" : "pointer",
+                  whiteSpace: "nowrap",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  transition: "all 0.2s",
+                  boxShadow: isSelected ? "0 4px 14px rgba(21, 128, 61, 0.25)" : "var(--shadow-sm)",
+                  opacity: isDisabled ? 0.45 : 1
+                }}
+                title={isDisabled ? `Restricted: You are in Department ${facultyDept}` : d.name}
+              >
+                <span>{d.code}</span>
+                <span style={{
+                  background: isSelected ? "rgba(255,255,255,0.25)" : "#f1f5f9",
+                  fontSize: "0.72rem",
+                  padding: "2px 7px",
+                  borderRadius: 10,
+                  color: isSelected ? "#ffffff" : "var(--green-primary)",
+                  fontWeight: 700
+                }}>
+                  {d.total_students ?? "—"}
+                </span>
+              </button>
+            );
+          })
+        )}
       </div>
 
-      {errorMsg && (
-        <div style={{
+      {(errorMsg || listError) && (
+        <div role="alert" style={{
           background: "var(--danger-dim)",
           border: "1px solid #fecaca",
           color: "var(--danger)",
@@ -192,7 +208,8 @@ export default function DepartmentExplorer({ setView, onSelectStudent }) {
           fontSize: "0.85rem",
           marginBottom: 20
         }}>
-          {errorMsg}
+          {errorMsg || listError}
+          <button className="btn btn-secondary" style={{ marginLeft: 12 }} onClick={() => setRefreshKey((value) => value + 1)}>Retry</button>
         </div>
       )}
 
@@ -240,7 +257,7 @@ export default function DepartmentExplorer({ setView, onSelectStudent }) {
             <Users size={22} color="var(--green-primary)" />
             <div>
               <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700 }}>Total Students</div>
-              <div style={{ fontSize: "1.25rem", fontWeight: 800, color: "var(--text-primary)" }}>{currentDeptInfo?.total_students || 0}</div>
+              <div style={{ fontSize: "1.25rem", fontWeight: 800, color: "var(--text-primary)" }}>{rosterData ? rosterData.total_enrolled : rosterLoading ? "…" : "—"}</div>
             </div>
           </div>
 
@@ -257,7 +274,7 @@ export default function DepartmentExplorer({ setView, onSelectStudent }) {
             <Briefcase size={22} color="var(--info)" />
             <div>
               <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700 }}>Hiring Companies</div>
-              <div style={{ fontSize: "1.25rem", fontWeight: 800, color: "var(--text-primary)" }}>{currentDeptInfo?.total_companies || 0}</div>
+              <div style={{ fontSize: "1.25rem", fontWeight: 800, color: "var(--text-primary)" }}>{currentDeptInfo?.total_companies ?? (rosterLoading ? "…" : "—")}</div>
             </div>
           </div>
         </div>
@@ -279,7 +296,7 @@ export default function DepartmentExplorer({ setView, onSelectStudent }) {
               Student Roster — Department of {selectedDept}
             </h4>
             <p style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
-              {filteredStudents.length} students currently registered for internships
+              {rosterLoading ? "Loading enrolled students…" : errorMsg ? "Student records could not be loaded." : `${filteredStudents.length} students currently registered for internships`}
             </p>
           </div>
 
@@ -289,6 +306,7 @@ export default function DepartmentExplorer({ setView, onSelectStudent }) {
               style={{ padding: "8px 12px 8px 34px", fontSize: "0.84rem" }}
               placeholder="Search student or company..."
               value={search}
+              aria-label="Search student roster"
               onChange={(e) => setSearch(e.target.value)}
             />
             <Search size={14} color="var(--green-primary)" style={{ position: "absolute", left: 12, top: 11 }} />
@@ -299,16 +317,27 @@ export default function DepartmentExplorer({ setView, onSelectStudent }) {
           <table className="custom-table">
             <thead>
               <tr>
-                <th>Roll Number</th>
-                <th>Student Name</th>
-                <th>Department</th>
-                <th>Company Name</th>
-                <th>Year &amp; Section</th>
-                <th>Action</th>
+                <th scope="col">Roll Number</th>
+                <th scope="col">Student Name</th>
+                <th scope="col">Department</th>
+                <th scope="col">Company Name</th>
+                <th scope="col">Year &amp; Section</th>
+                <th scope="col">Action</th>
               </tr>
             </thead>
             <tbody>
-              {filteredStudents.length > 0 ? (
+              {rosterLoading ? (
+                <tr>
+                  <td colSpan="6" style={{ textAlign: "center", padding: "36px", color: "var(--text-muted)" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                      <RefreshCw size={16} className="spin" color="var(--green-primary)" />
+                      <span>Loading student roster...</span>
+                    </div>
+                  </td>
+                </tr>
+              ) : errorMsg ? (
+                <tr><td colSpan="6" style={{ textAlign: "center", padding: 36 }}>Unable to load student records. Use Retry above.</td></tr>
+              ) : filteredStudents.length > 0 ? (
                 filteredStudents.map((s) => (
                   <tr key={s.id}>
                     <td className="mono" style={{ color: "var(--green-primary)", fontWeight: 700 }}>
@@ -333,12 +362,12 @@ export default function DepartmentExplorer({ setView, onSelectStudent }) {
                           fontWeight: 800,
                           border: "1px solid #bbf7d0"
                         }}>
-                          {s.company_name.substring(0, 2).toUpperCase()}
+                          {(s.company_name || "CO").substring(0, 2).toUpperCase()}
                         </div>
-                        <span style={{ fontWeight: 600 }}>{s.company_name}</span>
+                        <span style={{ fontWeight: 600 }}>{s.company_name || "Not assigned"}</span>
                       </div>
                     </td>
-                    <td style={{ color: "var(--text-dim)", fontSize: "0.84rem" }}>{s.year_section}</td>
+                    <td style={{ color: "var(--text-dim)", fontSize: "0.84rem" }}>{s.year_section || "—"}</td>
                     <td>
                       <button
                         className="btn btn-outline"
@@ -356,7 +385,7 @@ export default function DepartmentExplorer({ setView, onSelectStudent }) {
               ) : (
                 <tr>
                   <td colSpan="6" style={{ textAlign: "center", padding: "36px", color: "var(--text-muted)" }}>
-                    {rosterLoading ? "Loading student records..." : `No students found for ${selectedDept} department.`}
+                    {search ? `No students matched "${search}".` : `No students registered for Department of ${selectedDept}.`}
                   </td>
                 </tr>
               )}

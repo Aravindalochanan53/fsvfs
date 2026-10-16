@@ -17,7 +17,8 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dp = math.radians(lat2 - lat1)
     dl = math.radians(lon2 - lon1)
     a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return round(R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)), 1)
+    a = min(1.0, max(0.0, a))
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
 def evaluate_geofence(
@@ -33,16 +34,15 @@ def evaluate_geofence(
     flags: list[str] = []
     within = distance_m <= radius_m
 
-    if accuracy_m is not None:
-        if accuracy_m > 1000:
-            flags.append("gps_accuracy_very_low")
-        elif accuracy_m > 250:
-            flags.append("gps_accuracy_low")
+    from app.core.config import settings
+    reliable = accuracy_m is not None and math.isfinite(accuracy_m) and 0 < accuracy_m <= settings.MIN_ACCURACY_M
+    if not reliable:
+        flags.append("gps_accuracy_low_or_missing")
 
     if not within:
         flags.append("outside_geofence")
 
-    verified = within and "gps_accuracy_very_low" not in flags
+    verified = within and reliable
     return {
         "distance_m": distance_m,
         "radius_m": radius_m,

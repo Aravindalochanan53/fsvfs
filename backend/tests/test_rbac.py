@@ -41,6 +41,11 @@ def test_faculty_can_view_own_department_roster(client, seed_faculty, seed_stude
     headers = auth_header(login_faculty(client))
     r = client.get("/api/departments/CSE", headers=headers)
     assert r.status_code == 200
+    body = r.json()
+    assert body["total_enrolled"] == 1
+    assert body["department"]["total_students"] == 1
+    assert body["department"]["total_companies"] == 1
+    assert body["students"][0]["id"] == seed_student.id
 
 
 def test_faculty_cannot_review_other_department_exception(

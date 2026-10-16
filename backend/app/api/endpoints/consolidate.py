@@ -25,12 +25,12 @@ def consolidated_summary(
     attendance_values = []
     for student in students:
         attendance = db.query(Attendance).filter(Attendance.student_id == student.id).all()
-        verified = sum(1 for row in attendance if row.status == "Present / Verified")
+        verified = sum(1 for row in attendance if row.status in ("Present / Verified", "Present", "Corrected"))
         attendance_pct = round((verified / len(attendance)) * 100, 1) if attendance else 0.0
         attendance_values.append(attendance_pct)
         report = db.query(InternshipReport).filter(InternshipReport.student_id == student.id).first()
         has_document = db.query(Document.id).filter(Document.student_id == student.id).first() is not None
-        is_completed = bool(report and report.status in ("Approved", "Completed"))
+        is_completed = bool(report and report.status in ("Approved", "Completed", "Complete"))
         records.append({
             "id": student.id,
             "name": student.student_name,

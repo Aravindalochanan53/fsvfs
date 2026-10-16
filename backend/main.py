@@ -1,14 +1,20 @@
 from contextlib import asynccontextmanager
 import os
+import logging
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.exc import OperationalError
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from app.api.api import api_router
 from app.core.config import settings
 from app.db.seed import seed_database
+from app.db.session import get_db
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -38,15 +44,28 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,  # explicit list, never "*"
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"],
 )
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
 
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(self), camera=(), microphone=()"
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.exception_handler(OperationalError)
 async def database_unavailable_handler(request: Request, exc: OperationalError):
+    logger.error("Database operation failed on %s", request.url.path)
     return JSONResponse(
         status_code=503,
         content={
@@ -59,6 +78,7 @@ async def database_unavailable_handler(request: Request, exc: OperationalError):
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.error("Unhandled error on %s", request.url.path, exc_info=(type(exc), exc, exc.__traceback__))
     # Consistent error envelope; never leak stack traces to clients.
     return JSONResponse(
         status_code=500,
@@ -75,6 +95,11 @@ def root():
     }
 
 
+@app.get("/docs", include_in_schema=False)
+def docs_redirect():
+    return RedirectResponse(url="/api/docs")
+
+
 @app.get("/api/health", tags=["Health"])
 def health_check():
     return {
@@ -83,6 +108,12 @@ def health_check():
         "version": settings.VERSION,
         "db_engine": settings.DB_ENGINE,
     }
+
+
+@app.get("/api/ready", tags=["Health"])
+def readiness_check(db: Session = Depends(get_db)):
+    db.execute(text("SELECT 1"))
+    return {"status": "ready"}
 
 
 if __name__ == "__main__":
