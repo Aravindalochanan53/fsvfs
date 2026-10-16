@@ -97,7 +97,13 @@ Copy existing attendance radius, accuracy and work-hour policies explicitly.
 Rotate secrets already present in old Git history before going public.
 
 Production startup checks reject local/ephemeral storage and invalid settings
-instead of silently starting an empty SQLite DB. In a configured shell run:
+instead of silently starting an empty SQLite DB. The Docker entrypoint serves
+only secret-free HTTP 503 setup diagnostics when those checks fail; no auth/data
+router is loaded, no session is created, and /api/ready never reports healthy.
+Open /api/health to see configuration_errors containing setting names (not
+values), correct them in the backend Production environment, then Redeploy.
+Unexpected programming/import errors still require Vercel Runtime Logs.
+In a configured shell run:
 
 ```powershell
 python scripts/check_deployment.py
@@ -126,13 +132,17 @@ https://vercel.com/kb/guide/docker
 
 ## Verification and remaining blockers
 
-Local SQL Server's expanded mapped-schema preflight passed. Backend: 69 tests
+Local SQL Server's expanded mapped-schema preflight passed. Backend: 74 tests
 passed on isolated SQLite with MSSQL query compilation and mocked Blob contracts.
-Frontend: six GPS tests passed; production build succeeded.
+Frontend: 11 GPS/API-response tests passed; production build succeeded.
 The configuration instance passed validation against Vercel's published JSON
 schema. Local /api/ready still passed against kongu_db after these changes.
 
-Docker/Vercel CLI are unavailable here, so the container image and live deployment
-were not run. Cloud SQL provisioning/migration, real Blob access/transfer, and
+The supplied Vercel build log for 9b2c3b2 confirms its container, ODBC installation,
+dependencies and frontend build succeeded, while public API requests subsequently
+returned FUNCTION_INVOCATION_FAILED. That build log contains no runtime traceback.
+The diagnostic entrypoint change was tested locally, including cold import with
+missing production settings; its new image has not yet been verified on Vercel.
+Docker/Vercel CLI are unavailable here. Cloud SQL provisioning/migration, Blob access, and
 deployed end-to-end testing remain blocked on the user's cloud setup. No claim
 is made that an unconfigured Vercel deployment is production-ready.

@@ -27,4 +27,4 @@ COPY . ./
 
 # Vercel supplies PORT at runtime. Defaulting to 80 also permits local docker
 # execution with `docker run -p 8000:80`.
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-80}"]
+CMD ["sh", "-c", "uvicorn entrypoint:app --host 0.0.0.0 --port ${PORT:-80}"]

@@ -38,6 +38,7 @@ def test_valid_remote_database_config_retains_kongu_db(monkeypatch):
         "DB_ENGINE": "mssql", "MSSQL_SERVER": "tcp:example.database.windows.net,1433",
         "MSSQL_DATABASE": "kongu_db", "MSSQL_USER": "portal", "MSSQL_PASSWORD": "test-only",
         "MSSQL_TRUSTED_CONNECTION": "no", "MSSQL_TRUST_CERTIFICATE": "no", "MSSQL_ENCRYPT": "yes",
+        "SECRET_KEY": "test-production-secret-that-is-long-enough",
     }.items():
         monkeypatch.setattr(Settings, field, value)
     config = Settings()

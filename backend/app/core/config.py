@@ -4,6 +4,7 @@ import urllib.parse
 import re
 from pathlib import Path
 from dotenv import load_dotenv
+from app.core.errors import DeploymentConfigurationError
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -121,7 +122,7 @@ class Settings:
 
     def ensure_secret(self) -> None:
         if self.IS_PRODUCTION and len(self.SECRET_KEY) < 32:
-            raise RuntimeError("Production requires a SECRET_KEY of at least 32 characters")
+            raise DeploymentConfigurationError(["Production requires a SECRET_KEY of at least 32 characters"])
         if not self.SECRET_KEY:
             # Persist a strong generated key so tokens survive restarts in dev.
             key_file = BASE_DIR / ".secret_key"
@@ -142,6 +143,8 @@ class Settings:
             errors.append("UPLOAD_STORAGE must be local or vercel_blob")
         if not self.IS_PRODUCTION:
             return errors
+        if len(self.SECRET_KEY) < 32:
+            errors.append("Production requires a SECRET_KEY of at least 32 characters")
         url = self.get_database_url()
         if url.startswith("sqlite"):
             errors.append("Production requires a persistent remote SQL Server database; SQLite is not durable on Vercel")
@@ -161,7 +164,7 @@ class Settings:
             errors.append("Vercel requires UPLOAD_STORAGE=vercel_blob; local uploads disappear across instances")
         if self.UPLOAD_STORAGE == "vercel_blob" and not (
             os.getenv("BLOB_READ_WRITE_TOKEN") or os.getenv("VERCEL_BLOB_READ_WRITE_TOKEN")
-            or (os.getenv("BLOB_STORE_ID") and os.getenv("VERCEL_OIDC_TOKEN"))
+            or (os.getenv("BLOB_STORE_ID") and (self.IS_VERCEL or os.getenv("VERCEL_OIDC_TOKEN")))
         ):
             errors.append("Connect a private Vercel Blob store (BLOB_STORE_ID/OIDC or BLOB_READ_WRITE_TOKEN)")
         if os.getenv("SEED_DATABASE_ON_STARTUP", "false").lower() == "true":
@@ -170,6 +173,9 @@ class Settings:
 
 
 settings = Settings()
+_configuration_errors = settings.deployment_errors()
+if _configuration_errors:
+    raise DeploymentConfigurationError(_configuration_errors)
 settings.ensure_secret()
 settings.DATABASE_URL = settings.get_database_url()
 

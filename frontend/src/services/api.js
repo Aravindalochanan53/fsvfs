@@ -1,3 +1,5 @@
+import { readApiResponse } from "./apiResponse";
+
 const API_BASE = (import.meta.env.VITE_API_BASE || "/api").replace(/\/$/, "");
 
 function getAuthHeaders() {
@@ -29,7 +31,7 @@ async function request(endpoint, options = {}) {
 
   try {
     const response = await fetch(url, config);
-    const data = await response.json().catch(() => ({}));
+    const data = await readApiResponse(response);
     if (!response.ok) {
       if (response.status === 401 && !endpoint.startsWith('/auth/')) {
         window.dispatchEvent(new Event('kec-session-expired'));
